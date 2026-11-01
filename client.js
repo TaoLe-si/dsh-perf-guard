@@ -113,8 +113,6 @@ window.__ModuleLoader__.load({
       /* ---- 全局动效：对话框 / 菜单 / 面板 / 列表项 / 按钮 ---- */
       '@keyframes dsh-pg-pop { from { opacity: 0; transform: translateY(6px) scale(.985); } to { opacity: 1; transform: none; } }',
       '@keyframes dsh-pg-slide-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }',
-      '[data-perfguard-motion="on"] [role="dialog"], [data-perfguard-motion="on"] [data-modal] { animation: dsh-pg-pop .2s cubic-bezier(.22,1,.36,1) both; }',
-      '[data-perfguard-motion="on"] [role="menu"], [data-perfguard-motion="on"] [role="listbox"], [data-perfguard-motion="on"] [data-dockkit-tab-menu] { animation: dsh-pg-fade-in .14s cubic-bezier(.4,0,.2,1) both; }',
       '[data-perfguard-motion="on"] [data-dockkit-pane], [data-perfguard-motion="on"] [data-dockkit-float] { animation: dsh-pg-slide-in .22s cubic-bezier(.16,1,.3,1) both; }',
       '[data-perfguard-motion="on"] [data-dockkit-tab] { transition: background-color .14s cubic-bezier(.4,0,.2,1), color .14s cubic-bezier(.4,0,.2,1), transform .14s cubic-bezier(.4,0,.2,1); }',
       '[data-perfguard-motion="on"] [data-dockkit-tab]:active { transform: scale(.985); }',
