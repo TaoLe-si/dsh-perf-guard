@@ -20,7 +20,7 @@ import { zstdDecompressSync } from 'node:zlib'
 
 export const inject = ['webServer']
 
-const VERSION = '1.0.1'
+const VERSION = '1.0.2'
 const ROUTE_PREFIX = '/api/perf-guard'
 const SESSION_SCAN_TTL_MS = 60 * 1000
 const MONITOR_INTERVAL_MS = 30 * 1000
@@ -208,7 +208,7 @@ function statusOf(failure, error) {
   return null
 }
 
-const TRANSPORT_PATTERN = /TRANSPORT|STREAM|TRUNCATED|terminated|Connection error|stream ended|socket hang up|ECONNRESET|other side closed|premature close|unexpected end/i
+const TRANSPORT_PATTERN = /TRANSPORT|STREAM|TRUNCATED|TIMEOUT|ETIMEDOUT|timed out|request timeout|terminated|Connection error|stream ended|socket hang up|ECONNRESET|other side closed|premature close|unexpected end/i
 
 /** 无 HTTP 状态码的传输层/截断类失败。 */
 function isTransportFailure(failure, error, message) {

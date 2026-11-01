@@ -91,6 +91,9 @@ test('isTransportFailure：识别传输/截断，排除用户取消', () => {
   assert.equal(isTransportFailure(undefined, new Error('terminated')), true)
   assert.equal(isTransportFailure({ code: 'ABORTED', message: 'aborted' }), false)
   assert.equal(isTransportFailure({ code: 'AUTH', message: '401 unauthorized' }), false)
+  assert.equal(isTransportFailure({ code: 'TIMEOUT', message: 'Request timed out.' }), true)
+  assert.equal(isTransportFailure(undefined, new Error('Request timed out.')), true)
+  assert.equal(isTransportFailure(undefined, new Error('connect ETIMEDOUT 1.2.3.4:443')), true)
 })
 
 test('传输中断：即使已输出内容也整段重试', async () => {
