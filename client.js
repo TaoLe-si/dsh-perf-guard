@@ -137,17 +137,27 @@ window.__ModuleLoader__.load({
       '  [data-perfguard-motion="on"] [data-dockkit-pane], [data-perfguard-motion="on"] [data-chat-turn] { animation: none; }',
       '  [data-perfguard-motion="on"] button, [data-perfguard-motion="on"] [role="button"] { transition: none; }',
       '}',
+      /* 对话区顶部一层极淡的极光洗色，让大面积留白不像空白表格。 */
+      '[data-perfguard-polish="on"] [data-conversation-content] { position: relative; }',
+      '[data-perfguard-polish="on"] [data-conversation-content]::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 360px; background: url("/api/perf-guard/assets/aurora.png") center top / 1280px auto no-repeat; opacity: .16; pointer-events: none; }',
+      '[data-ds-dark-theme] [data-perfguard-polish="on"] [data-conversation-content]::before { opacity: .09; }',
       /* 设置页样式（全部走主题变量，深浅色自动跟随）。 */
       '.dsh-pg { display: flex; flex-direction: column; gap: 22px; max-width: 820px; padding: 10px 4px 40px; }',
-      '.dsh-pg-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }',
+      /* 柔和高级感：hero 用生成的极光底图 + 植物线稿，卡片用大圆角与极淡投影。 */
+      '.dsh-pg-hero { position: relative; overflow: hidden; border-radius: 20px; padding: 22px 22px 20px; border: 1px solid rgba(127,127,127,.14); background-image: url("/api/perf-guard/assets/aurora.png"); background-size: cover; background-position: center; }',
+      '.dsh-pg-sprig { position: absolute; right: -30px; bottom: -52px; width: 210px; height: 210px; opacity: .34; pointer-events: none; user-select: none; }',
+      '[data-ds-dark-theme] .dsh-pg-hero { background-image: linear-gradient(rgba(10,14,12,.62), rgba(10,14,12,.62)), url("/api/perf-guard/assets/aurora.png"); }',
+      '[data-ds-dark-theme] .dsh-pg-sprig { opacity: .2; filter: invert(1) brightness(1.6); }',
+      '.dsh-pg-head { position: relative; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }',
       '.dsh-pg-head-main { display: flex; flex-direction: column; gap: 6px; }',
       '.dsh-pg-badge { flex: none; font-size: 11px; line-height: 1; padding: 5px 9px; border-radius: 999px; border: 1px solid var(--dsh-border, rgba(127,127,127,.3)); opacity: .68; }',
       '.dsh-pg-group { display: flex; flex-direction: column; gap: 10px; }',
-      '.dsh-pg-group-title { font-size: 13px; font-weight: 600; opacity: .85; }',
+      '.dsh-pg-group-title { font-size: 12px; font-weight: 600; letter-spacing: .08em; opacity: .58; }',
       '.dsh-pg-group-hint { font-size: 12px; line-height: 1.6; opacity: .55; margin-bottom: 2px; }',
-      '.dsh-pg-title { font-size: 14px; font-weight: 600; opacity: .9; }',
+      '.dsh-pg-title { font-size: 17px; font-weight: 600; letter-spacing: .01em; opacity: .94; }',
       '.dsh-pg-desc { font-size: 12px; line-height: 1.7; opacity: .62; }',
-      '.dsh-pg-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 12px 14px; border: 1px solid var(--dsh-border, rgba(127,127,127,.24)); border-radius: 12px; background: var(--dsh-fill-1, rgba(127,127,127,.03)); }',
+      '.dsh-pg-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 14px 16px; border: 1px solid var(--dsh-border, rgba(127,127,127,.18)); border-radius: 16px; background: var(--dsh-fill-1, rgba(127,127,127,.03)); box-shadow: 0 1px 2px rgba(20,30,25,.03), 0 12px 32px -22px rgba(20,30,25,.45); transition: border-color .16s cubic-bezier(.4,0,.2,1), box-shadow .16s cubic-bezier(.4,0,.2,1); }',
+      '.dsh-pg-row:hover { border-color: var(--dsh-border-strong, rgba(127,127,127,.32)); box-shadow: 0 1px 2px rgba(20,30,25,.04), 0 16px 40px -24px rgba(20,30,25,.5); }',
       '.dsh-pg-row-main { display: flex; flex-direction: column; gap: 4px; }',
       '.dsh-pg-row b { font-size: 13px; font-weight: 600; }',
       '.dsh-pg-row span { font-size: 12px; line-height: 1.6; opacity: .62; }',
@@ -156,7 +166,7 @@ window.__ModuleLoader__.load({
       '.dsh-pg-switch[data-on="true"] { background: var(--dsh-accent, #4c8dff); border-color: transparent; }',
       '.dsh-pg-switch[data-on="true"]::after { transform: translateX(16px); background: #fff; }',
       '.dsh-pg-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }',
-      '.dsh-pg-card { padding: 12px 14px; border-radius: 12px; border: 1px solid var(--dsh-border, rgba(127,127,127,.24)); background: var(--dsh-fill-1, rgba(127,127,127,.03)); }',
+      '.dsh-pg-card { padding: 14px 16px; border-radius: 16px; border: 1px solid var(--dsh-border, rgba(127,127,127,.18)); background: var(--dsh-fill-1, rgba(127,127,127,.03)); box-shadow: 0 1px 2px rgba(20,30,25,.03), 0 12px 32px -22px rgba(20,30,25,.45); }',
       '.dsh-pg-card em { display: block; font-style: normal; font-size: 11px; opacity: .55; margin-bottom: 4px; }',
       '.dsh-pg-card strong { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }',
       '.dsh-pg-list { margin: 0; padding: 0 0 0 16px; font-size: 12px; line-height: 1.8; opacity: .75; }',
@@ -421,167 +431,213 @@ window.__ModuleLoader__.load({
      *  - 一旦用户向上滚离底部（>64px）立刻脱离；
      *  - 再滚回距底 24px 内自动恢复跟随。
      */
-    function installFollowTail(isEnabled) {
-      let pinned = true
-      let frame = 0
-      let active = null
-      let intentUntil = 0
-      let pointerDown = false
-      let lastRestoreAt = 0
-      const observed = new WeakSet()
-      const positions = new WeakMap()
-
-      /** 只有「用户明确的向上操作」才允许解除跟随；页面自锚定造成的位移不算。 */
-      function markIntent() {
-        intentUntil = Date.now() + 700
+    /**
+     * 跟随最新输出（可注入环境，便于在 Node 里跑仿真）。
+     *
+     * 设计要点：
+     *  - 只有「贴底」才算跟随；判定用 scrollHeight - scrollTop - clientHeight <= 24。
+     *  - 解除跟随只认用户手势：滚轮向上、PageUp/↑/Home、按住滚动条拖动（pointerdown）。
+     *    内容重排 / 浏览器滚动锚定造成的回退不算。
+     *  - 只要用户正在操作（intent 窗口内），一律不写 scrollTop —— 避免"被拉回底部"。
+     *  - 跟随中若 App 自己脱离了跟随（它渲染「回到底部」按钮），点它一次让 App 状态机自愈。
+     */
+    function createFollowController(env) {
+      const doc = env.document
+      const win = env.window
+      const clock = env.performance
+      const scrollerSelector = env.scrollerSelector || '[data-conversation-scroll]'
+      const isEnabled = env.isEnabled || (() => true)
+      const state = {
+        mode: 'follow',
+        intentUntil: 0,
+        pointerDown: false,
+        frame: 0,
+        attached: null,
+        /** 用 -Infinity 起步，否则时钟从 0 开始时会白白节流掉第一次。 */
+        lastRestoreAt: Number.NEGATIVE_INFINITY,
+        lastGap: 0,
+        lastTop: 0,
+        disabled: false,
       }
 
-      /** 页面上可能同时存在多个 [data-conversation-scroll]（主对话 + 侧栏预览），取最大的可见那个。 */
       function pickScroller() {
+        const list = doc.querySelectorAll(scrollerSelector)
         let best = null
-        for (const element of document.querySelectorAll(SCROLL_SELECTOR)) {
+        for (const element of list) {
           if (element.clientHeight <= 0) continue
           if (best === null || element.clientHeight > best.clientHeight) best = element
         }
         return best
       }
 
-      function bottomGap(element) {
+      function gapOf(element) {
         return element.scrollHeight - element.scrollTop - element.clientHeight
       }
 
-      function tick() {
-        frame = 0
-        const element = pickScroller()
-        if (element === null || !pinned || !isEnabled()) return
-        const gap = bottomGap(element)
-        if (gap <= 1) return
-        element.scrollTop = element.scrollTop + Math.max(1, gap * 0.3)
-        positions.set(element, { top: element.scrollTop, height: element.scrollHeight })
-        runtime.follows += 1
-        runtime.lastFollowAt = Date.now()
-        frame = window.requestAnimationFrame(tick)
+      function now() {
+        return clock.now()
       }
 
-      /**
-       * 贴底但 App 自己已经脱离跟随（它会渲染「回到底部」按钮）时，点一下它，
-       * 让 App 自己的 followingTail 状态机重新接管——比我们硬写 scrollTop 可靠。
-       */
+      function intentActive() {
+        return state.pointerDown || now() < state.intentUntil
+      }
+
+      function markIntent() {
+        state.intentUntil = now() + 700
+      }
+
+      /** 用户明确的向上手势：立刻转为阅读模式，且不再由我们来滚。 */
+      function markReading() {
+        if (state.mode === 'reading') return
+        state.mode = 'reading'
+        if (env.onState) env.onState(state.mode)
+      }
+
+      function markFollow() {
+        if (state.mode === 'follow') return
+        state.mode = 'follow'
+        if (env.onState) env.onState(state.mode)
+      }
+
       function restoreAppFollow() {
-        const now = Date.now()
-        if (now - lastRestoreAt < 800) return
-        const button = document.querySelector('[class*="toBottomSlot"] button')
-        if (button === null) return
-        lastRestoreAt = now
-        runtime.restores += 1
-        button.click()
+        if (state.mode !== 'follow') return
+        if (now() - state.lastRestoreAt < 900) return
+        const button = doc.querySelector('[class*="toBottomSlot"] button')
+        if (button === null || button === undefined) return
+        state.lastRestoreAt = now()
+        if (env.onRestore) env.onRestore()
+        if (typeof button.click === 'function') button.click()
       }
 
-      function follow() {
-        if (!isEnabled() || !pinned || frame !== 0) return
-        restoreAppFollow()
-        frame = window.requestAnimationFrame(tick)
-      }
-
-      function adopt(element) {
+      function step() {
+        state.frame = 0
+        if (state.disabled || !isEnabled()) return
+        if (state.mode !== 'follow' || intentActive()) return
+        const element = state.attached || pickScroller()
         if (element === null) return
-        if (!observed.has(element)) {
-          observed.add(element)
-          observer.observe(element, { childList: true, subtree: true, characterData: true })
-        }
-        if (element !== active) {
-          active = element
-          pinned = bottomGap(element) <= 24
-          positions.set(element, { top: element.scrollTop, height: element.scrollHeight })
-        }
-        runtime.scroller = true
-        runtime.pinned = pinned
+        const gap = gapOf(element)
+        if (gap <= 1) return
+        element.scrollTop = element.scrollTop + Math.max(1, gap * 0.45)
+        state.frame = win.requestAnimationFrame(step)
       }
 
-      const onScroll = (event) => {
+      /** 内容变化时调用：跟随模式下请求一次追底。 */
+      function follow() {
+        if (state.disabled || !isEnabled()) return
+        if (state.mode !== 'follow' || intentActive()) return
+        restoreAppFollow()
+        if (state.frame !== 0) return
+        state.frame = win.requestAnimationFrame(step)
+      }
+
+      function onScroll(event) {
         const element = event.target
-        if (!(element instanceof Element) || !element.matches(SCROLL_SELECTOR)) return
-        const gap = bottomGap(element)
-        const previous = positions.get(element)
-        const movedUp = previous !== undefined && element.scrollTop < previous.top - 2
-        positions.set(element, { top: element.scrollTop, height: element.scrollHeight })
-        runtime.gap = Math.round(gap)
-        runtime.scrollTop = Math.round(element.scrollTop)
+        if (!element || element !== state.attached) return
+        const gap = gapOf(element)
+        const movedUp = element.scrollTop < state.lastTop - 2
+        state.lastTop = element.scrollTop
+        state.lastGap = gap
         if (gap <= 24) {
-          pinned = true
-          runtime.pinned = true
+          markFollow()
           return
         }
-        // 只有「用户正在操作」造成的上移才解除跟随：
-        // 滚轮/方向键（700ms 窗口）或按住滚动条拖动。
-        // 思维链展开、内容重排、浏览器滚动锚定都会让 scrollTop 回退，这些一律不算。
-        if (movedUp && (Date.now() < intentUntil || pointerDown)) {
-          pinned = false
-          runtime.pinned = false
-        }
+        if (state.mode !== 'follow') return
+        // 只认「有手势的上移」。布局锚定同样会让 scrollTop 变小，但它没有手势。
+        if (movedUp && intentActive()) markReading()
       }
 
-      const onWheel = (event) => {
-        const target = event.target
-        if (!(target instanceof Element)) return
-        // 过程体 / 工具输出里的嵌套滚动不算「离开底部」。
-        if (target.closest('[data-step-process-body]') !== null) return
-        const element = target.closest(SCROLL_SELECTOR)
-        if (element === null) return
+      function onWheel(event) {
+        if (state.disabled) return
         markIntent()
-        if (event.deltaY >= 0) return
-        if (bottomGap(element) > 64) {
-          pinned = false
-          runtime.pinned = false
-        }
+        if (event.deltaY < 0) markReading()
       }
 
-      const onPointerDown = (event) => {
-        const target = event.target
-        if (!(target instanceof Element) || target.closest(SCROLL_SELECTOR) === null) return
-        pointerDown = true
+      function onPointerDown(event) {
+        if (state.disabled) return
+        if (!event.target) return
+        state.pointerDown = true
         markIntent()
       }
 
-      const onPointerUp = () => {
-        pointerDown = false
+      function onPointerUp() {
+        state.pointerDown = false
       }
 
-      const onKeyDown = (event) => {
+      function onKeyDown(event) {
         if (event.key !== 'PageUp' && event.key !== 'ArrowUp' && event.key !== 'Home') return
         markIntent()
-        const element = pickScroller()
-        if (element !== null && bottomGap(element) > 64) {
-          pinned = false
-          runtime.pinned = false
-        }
+        markReading()
       }
 
-      const observer = new MutationObserver(() => {
-        adopt(pickScroller())
+      const observer = new env.MutationObserver(() => {
         follow()
       })
 
-      adopt(pickScroller())
-      const attachTimer = window.setInterval(() => adopt(pickScroller()), 1500)
+      function attach() {
+        const element = pickScroller()
+        if (element === null) return
+        if (element !== state.attached) {
+          if (state.attached !== null) observer.disconnect()
+          state.attached = element
+          state.lastTop = element.scrollTop
+          state.lastGap = gapOf(element)
+          state.mode = gapOf(element) <= 24 ? 'follow' : 'reading'
+          observer.observe(element, { childList: true, subtree: true, characterData: true })
+        }
+      }
 
-      document.addEventListener('scroll', onScroll, { capture: true, passive: true })
-      document.addEventListener('wheel', onWheel, { capture: true, passive: true })
-      document.addEventListener('pointerdown', onPointerDown, { capture: true, passive: true })
-      document.addEventListener('pointerup', onPointerUp, { capture: true, passive: true })
-      document.addEventListener('keydown', onKeyDown, { capture: true })
+      function start() {
+        attach()
+        const timer = win.setInterval(attach, 1500)
+        doc.addEventListener('scroll', onScroll, { capture: true, passive: true })
+        doc.addEventListener('wheel', onWheel, { capture: true, passive: true })
+        doc.addEventListener('pointerdown', onPointerDown, { capture: true, passive: true })
+        doc.addEventListener('pointerup', onPointerUp, { capture: true, passive: true })
+        doc.addEventListener('keydown', onKeyDown, { capture: true })
+        return () => {
+          state.disabled = true
+          observer.disconnect()
+          win.clearInterval(timer)
+          win.cancelAnimationFrame(state.frame)
+          doc.removeEventListener('scroll', onScroll, { capture: true })
+          doc.removeEventListener('wheel', onWheel, { capture: true })
+          doc.removeEventListener('pointerdown', onPointerDown, { capture: true })
+          doc.removeEventListener('pointerup', onPointerUp, { capture: true })
+          doc.removeEventListener('keydown', onKeyDown, { capture: true })
+        }
+      }
 
-      return () => {
-        observer.disconnect()
-        window.clearInterval(attachTimer)
-        window.cancelAnimationFrame(frame)
-        document.removeEventListener('scroll', onScroll, { capture: true })
-        document.removeEventListener('wheel', onWheel, { capture: true })
-        document.removeEventListener('pointerdown', onPointerDown, { capture: true })
-        document.removeEventListener('pointerup', onPointerUp, { capture: true })
-        document.removeEventListener('keydown', onKeyDown, { capture: true })
+      return {
+        start,
+        state,
+        /** 仅供测试：模拟一次内容增长后的回调。 */
+        __follow: follow,
+        __scroll: onScroll,
       }
     }
+
+    function installFollowTail(isEnabled) {
+      const controller = createFollowController({
+        document,
+        window,
+        performance,
+        MutationObserver,
+        scrollerSelector: SCROLL_SELECTOR,
+        isEnabled,
+        onState: (mode) => {
+          runtime.pinned = mode === 'follow'
+        },
+        onRestore: () => {
+          runtime.restores += 1
+        },
+      })
+      const stop = controller.start()
+      runtime.scroller = controller.state.attached !== null
+      return () => {
+        stop()
+      }
+    }
+
     /** 中键关闭标签页（dockkit 标签 chip 上的 [data-dockkit-tab-close]）。 */
     function installMiddleClickClose() {
       const onAuxClick = (event) => {
@@ -760,14 +816,25 @@ window.__ModuleLoader__.load({
         { className: 'dsh-pg' },
         h(
           'div',
-          { className: 'dsh-pg-head' },
+          { className: 'dsh-pg-hero' },
+          h('img', {
+            className: 'dsh-pg-sprig',
+            src: '/api/perf-guard/assets/sprig.png',
+            alt: '',
+            'aria-hidden': 'true',
+            draggable: 'false',
+          }),
           h(
             'div',
-            { className: 'dsh-pg-head-main' },
-            h('div', { className: 'dsh-pg-title' }, '性能守卫'),
-            h('div', { className: 'dsh-pg-desc' }, '长上下文与多轮会话下的滚动降载、思考链自动展开与贴底跟随。所有开关即时生效，只影响渲染，不改动任何会话数据。'),
+            { className: 'dsh-pg-head' },
+            h(
+              'div',
+              { className: 'dsh-pg-head-main' },
+              h('div', { className: 'dsh-pg-title' }, '性能守卫'),
+              h('div', { className: 'dsh-pg-desc' }, '长上下文与多轮会话下的滚动降载、思考链自动展开与贴底跟随。所有开关即时生效，只影响渲染，不改动任何会话数据。'),
+            ),
+            h('span', { className: 'dsh-pg-badge' }, host ? 'v' + host.version : '本地插件'),
           ),
-          h('span', { className: 'dsh-pg-badge' }, host ? 'v' + host.version : '本地插件'),
         ),
         ...GROUPS.map((group) =>
           h(
@@ -806,6 +873,12 @@ window.__ModuleLoader__.load({
                   { className: 'dsh-pg-row', key: 'log' },
                   h('div', { className: 'dsh-pg-row-main' }, h('b', null, '详细错误日志'), h('span', null, '把状态码、错误码、模型与响应片段写进 desktop-next.log，并在下方保留最近 20 条。')),
                   h(Switch, { on: retry.logErrors === true, onToggle: () => saveRetry({ ...retry, logErrors: retry.logErrors !== true }) }),
+                ),
+                h(
+                  'div',
+                  { className: 'dsh-pg-row', key: 'transport' },
+                  h('div', { className: 'dsh-pg-row-main' }, h('b', null, '截断 / 传输中断重试'), h('span', null, '流被掐断、连接提前关闭、输出被截断（没有 HTTP 状态码）时整段重试；已经显示出来的部分会丢弃重来。')),
+                  h(Switch, { on: retry.retryTransport === true, onToggle: () => saveRetry({ ...retry, retryTransport: retry.retryTransport !== true }) }),
                 ),
                 h(
                   'div',
@@ -937,6 +1010,8 @@ window.__ModuleLoader__.load({
 
     exports.apply = apply
     exports.inject = ['slots']
+    /** 仅供测试：跟随控制器在假 DOM 上跑仿真。 */
+    exports.__internals = { createFollowController }
 
     return module.exports
   },

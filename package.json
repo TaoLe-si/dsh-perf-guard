@@ -1,6 +1,6 @@
 {
   "name": "dsh-perf-guard",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "DSH 性能守卫：长会话滚动降载、思考链自动展开、贴底跟随与宿主内存诊断。",
   "type": "module",
   "main": "index.js",
@@ -13,6 +13,7 @@
     "index.js",
     "client.js",
     "cordis.patch.yml",
+    "assets/",
     "README.md",
     "LICENSE"
   ],
@@ -36,7 +37,7 @@
     "url": "https://github.com/TaoLe-si/dsh-perf-guard/issues"
   },
   "scripts": {
-    "test": "node --test test/host-smoke.mjs && node test/client-smoke.mjs",
+    "test": "node --test test/host-smoke.mjs test/follow-sim.mjs && node test/client-smoke.mjs",
     "check": "node --check index.js && node --check client.js"
   },
   "engines": {

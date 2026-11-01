@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="640" viewBox="0 0 640 640">
+  <defs>
+    <linearGradient id="leaf" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7C9B8B"/>
+      <stop offset="1" stop-color="#4E6A5D"/>
+    </linearGradient>
+    <linearGradient id="stem" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8AA79A"/>
+      <stop offset="1" stop-color="#5B7A6B"/>
+    </linearGradient>
+  </defs>
+  <g fill="none" stroke="url(#stem)" stroke-width="3" stroke-linecap="round">
+    <path d="M320 600 C 300 470 300 330 340 170"/>
+    <path d="M318 520 C 262 470 232 420 226 366"/>
+    <path d="M322 430 C 380 384 412 336 418 282"/>
+    <path d="M330 336 C 288 292 268 246 266 200"/>
+  </g>
+  <g fill="url(#leaf)" fill-opacity="0.5" stroke="#4E6A5D" stroke-opacity="0.45" stroke-width="1.2">
+    <path d="M226 366 C 196 330 200 286 232 258 C 262 286 258 332 226 366 Z"/>
+    <path d="M418 282 C 452 250 452 206 424 176 C 392 206 390 250 418 282 Z"/>
+    <path d="M266 200 C 240 172 240 136 264 112 C 292 138 292 174 266 200 Z"/>
+    <path d="M340 170 C 316 128 322 84 352 58 C 384 92 378 138 340 170 Z"/>
+  </g>
+</svg>

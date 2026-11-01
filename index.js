@@ -15,10 +15,11 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 export const inject = ['webServer']
 
-const VERSION = '0.6.0'
+const VERSION = '0.7.0'
 const ROUTE_PREFIX = '/api/perf-guard'
 const SESSION_SCAN_TTL_MS = 60 * 1000
 const MONITOR_INTERVAL_MS = 30 * 1000
@@ -29,6 +30,8 @@ const WATCHED_STATUSES = ['400', '401', '402', '403', '429', '502', '503']
 const DEFAULT_RETRY_PREFS = {
   logErrors: true,
   maxRetries: 2,
+  /** 传输中断 / 流被截断（无 HTTP 状态码）是否重试。 */
+  retryTransport: true,
   statuses: {
     '400': false,
     '401': false,
@@ -40,6 +43,12 @@ const DEFAULT_RETRY_PREFS = {
   },
 }
 const MAX_ERRORS = 60
+/** UI 装饰素材：由 tools/generate-assets.mjs 生成的 PNG。 */
+const ASSET_FILES = new Set(['aurora.png', 'sprig.png', 'halo.png'])
+
+function assetPath(name) {
+  return fileURLToPath(new URL('./assets/' + name, import.meta.url))
+}
 
 function dshHome() {
   const fromEnv = process.env.DSH_HOME
@@ -57,6 +66,7 @@ function normalizePrefs(raw) {
     logErrors: typeof raw?.logErrors === 'boolean' ? raw.logErrors : DEFAULT_RETRY_PREFS.logErrors,
     // -1 = 不设上限；其余 0–50。用户可以在设置页选择「不限」。
     maxRetries: Number.isInteger(raw?.maxRetries) && raw.maxRetries >= -1 ? Math.min(50, raw.maxRetries) : DEFAULT_RETRY_PREFS.maxRetries,
+    retryTransport: typeof raw?.retryTransport === 'boolean' ? raw.retryTransport : DEFAULT_RETRY_PREFS.retryTransport,
     statuses: { ...DEFAULT_RETRY_PREFS.statuses },
   }
   for (const status of WATCHED_STATUSES) {
@@ -192,16 +202,29 @@ function statusOf(failure, error) {
   return null
 }
 
+const TRANSPORT_PATTERN = /TRANSPORT|STREAM|terminated|Connection error|stream ended|socket hang up|ECONNRESET|other side closed|premature close|unexpected end/i
+
+/** 无 HTTP 状态码的传输层/截断类失败。 */
+function isTransportFailure(failure, error, message) {
+  const code = String((failure && failure.code) || (error && error.code) || '')
+  if (code === 'ABORTED' || code === 'CANCELLED') return false
+  if (TRANSPORT_PATTERN.test(code)) return true
+  return TRANSPORT_PATTERN.test(message || messageOf(failure, error))
+}
+
 function describeFailure(failure, error, options, attempt) {
+  const message = messageOf(failure, error)
+  const status = statusOf(failure, error)
   return {
     at: new Date().toISOString(),
-    status: statusOf(failure, error),
+    kind: status === null && isTransportFailure(failure, error, message) ? 'transport' : status === null ? 'unknown' : 'http',
+    status,
     code: (failure && failure.code) || (error && error.code) || null,
     provider: options?.provider ?? null,
     model: options?.model ?? null,
     attempt,
     retryAfterMs: failure && Number.isFinite(failure.providerRetryAfterMs) ? failure.providerRetryAfterMs : null,
-    message: messageOf(failure, error).slice(0, 600),
+    message: message.slice(0, 600),
   }
 }
 
@@ -231,13 +254,23 @@ async function* withRetryAndLogging(ctx, options, next) {
   for (let attempt = 0; ; attempt += 1) {
     const attemptNumber = attempt + 1
     let emitted = false
+    let sawFinish = false
     let pending = null
     try {
       const stream = await next()
       for await (const chunk of stream) {
-        if (chunk !== null && typeof chunk === 'object' && chunk.type === 'finish' && chunk.reason?.kind === 'error') {
-          pending = { failure: chunk.reason.failure, chunk }
-          break
+        if (chunk !== null && typeof chunk === 'object' && chunk.type === 'finish') {
+          sawFinish = true
+          if (chunk.reason?.kind === 'error') {
+            pending = { failure: chunk.reason.failure, chunk }
+            break
+          }
+          if (chunk.reason?.kind === 'aborted') {
+            yield chunk
+            return
+          }
+          yield chunk
+          continue
         }
         emitted = true
         yield chunk
@@ -246,6 +279,10 @@ async function* withRetryAndLogging(ctx, options, next) {
       pending = { failure: undefined, error }
     }
 
+    // 流结束却没有 finish chunk：静默截断（代理掐断、连接提前关闭）。
+    if (pending === null && !sawFinish && emitted) {
+      pending = { failure: { code: 'TRANSPORT', message: 'stream ended without finish chunk' } }
+    }
     if (pending === null) return
 
     const info = describeFailure(pending.failure, pending.error, options, attemptNumber)
@@ -253,8 +290,8 @@ async function* withRetryAndLogging(ctx, options, next) {
     if (prefs.logErrors) {
       const scope = [info.provider, info.model].filter(Boolean).join('/')
       ctx.logger?.warn?.(
-        'perf-guard: LLM HTTP %s%s · %s · attempt %s · %s',
-        info.status ?? '?',
+        'perf-guard: LLM %s%s · %s · attempt %s · %s',
+        info.kind === 'http' ? 'HTTP ' + (info.status ?? '?') : info.kind.toUpperCase(),
         info.code ? ' ' + info.code : '',
         scope || (options?.provider ?? '-'),
         attemptNumber,
@@ -263,9 +300,10 @@ async function* withRetryAndLogging(ctx, options, next) {
     }
 
     const key = info.status === null ? null : String(info.status)
-    const retryable = key !== null
-      && prefs.statuses[key] === true
-      && !emitted
+    const httpRetry = key !== null && prefs.statuses[key] === true && !emitted
+    // 传输中断 / 截断：允许在已输出部分内容后重试（整段重来），由用户开关控制。
+    const transportRetry = info.kind === 'transport' && prefs.retryTransport === true
+    const retryable = (httpRetry || transportRetry)
       && (prefs.maxRetries < 0 || attemptNumber <= prefs.maxRetries)
       && options?.signal?.aborted !== true
 
@@ -274,16 +312,22 @@ async function* withRetryAndLogging(ctx, options, next) {
         yield pending.chunk
         return
       }
+      if (pending.failure?.code === 'TRANSPORT' && pending.error === undefined) {
+        // 静默截断：交给上层结束本轮，不抛错（协议里没有对应 chunk 形态）。
+        return
+      }
       throw pending.error
     }
 
     const delay = backoffMs(info, attempt)
     ctx.logger?.warn?.(
-      'perf-guard: retry %s/%s in %sms after HTTP %s',
+      'perf-guard: retry %s/%s in %sms after %s%s%s',
       attemptNumber,
       prefs.maxRetries < 0 ? 'inf' : prefs.maxRetries,
       delay,
-      info.status,
+      info.kind === 'http' ? 'HTTP ' : '',
+      info.status ?? info.kind,
+      emitted ? ' (partial output discarded)' : '',
     )
     await sleep(delay, options?.signal)
     if (options?.signal?.aborted) return
@@ -331,6 +375,21 @@ export function apply(ctx) {
   const disposers = []
   const logger = ctx.logger
 
+  /** 素材路由：浏览器以 <img>/background 请求，不会带自定义头，只做方法与路径校验。 */
+  function assetGuard(handler) {
+    return async (req, res) => {
+      if (req.method !== 'GET') {
+        sendJson(res, 405, { ok: false, error: 'GET only' })
+        return
+      }
+      try {
+        await handler(req, res)
+      } catch {
+        sendJson(res, 404, { ok: false, error: 'not found' })
+      }
+    }
+  }
+
   function guard(methods, handler) {
     return async (req, res) => {
       if (!methods.includes(req.method)) {
@@ -349,7 +408,22 @@ export function apply(ctx) {
     }
   }
 
+  const assetRoutes = [...ASSET_FILES].map((name) => ({
+    kind: 'exact',
+    path: ROUTE_PREFIX + '/assets/' + name,
+    handler: assetGuard(async (_req, res) => {
+      const bytes = await readFile(assetPath(name))
+      res.writeHead(200, {
+        'content-type': 'image/png',
+        'content-length': bytes.length,
+        'cache-control': 'public, max-age=86400',
+      })
+      res.end(bytes)
+    }),
+  }))
+
   const routes = [
+    ...assetRoutes,
     {
       kind: 'exact',
       path: ROUTE_PREFIX + '/health',
@@ -432,5 +506,5 @@ export function apply(ctx) {
 }
 
 /** 仅供测试：错误分类、退避与偏好归一化。 */
-export const __internals = { statusOf, backoffMs, normalizePrefs, withRetryAndLogging }
+export const __internals = { statusOf, backoffMs, normalizePrefs, withRetryAndLogging, isTransportFailure }
 

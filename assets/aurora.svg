@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="700" viewBox="0 0 1600 700">
+  <defs>
+    <radialGradient id="a" cx="0.78" cy="0.1" r="0.7">
+      <stop offset="0" stop-color="#A8C3B4" stop-opacity="0.55"/>
+      <stop offset="0.45" stop-color="#A8C3B4" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#A8C3B4" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="b" cx="0.12" cy="0.85" r="0.65">
+      <stop offset="0" stop-color="#E9D3C6" stop-opacity="0.5"/>
+      <stop offset="0.5" stop-color="#E9D3C6" stop-opacity="0.14"/>
+      <stop offset="1" stop-color="#E9D3C6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="c" cx="0.55" cy="0.42" r="0.55">
+      <stop offset="0" stop-color="#CFE3D9" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#CFE3D9" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft"><feGaussianBlur stdDeviation="28"/></filter>
+  </defs>
+  <g filter="url(#soft)">
+    <rect width="1600" height="700" fill="url(#a)"/>
+    <rect width="1600" height="700" fill="url(#b)"/>
+    <rect width="1600" height="700" fill="url(#c)"/>
+  </g>
+</svg>

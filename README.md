@@ -200,3 +200,32 @@ MIT
 
 `package.json` 声明 `engines.dsh: ">=0.2.1-rc.4"`。DSH 在加载 profile 条目时会校验该字段，
 低于基线的内核会直接禁用本插件并打印原因（官方 `evaluatePluginCompatibility`），无法安装/挂载。
+
+## v0.7：截断/传输重试、设计素材、跟随仿真测试
+
+### 截断与传输中断也重试
+
+- 新增开关「**截断 / 传输中断重试**」（默认开）：
+  - 流被掐断、连接提前关闭、`TRANSPORT`/`STREAM_*` 等没有 HTTP 状态码的失败；
+  - **静默截断**：流结束却没有任何 `finish` chunk（代理掐断的典型形态）。
+- 这类失败即使在已经输出部分内容后也会整段重试（已显示的部分会丢弃重来），日志标记 `(partial output discarded)`；
+  用户主动取消（`ABORTED`/`CANCELLED`）永不重试。
+- 重试上限与状态码重试共用同一套设置（含「不限」）。
+
+### 设计素材（SVG → PNG）
+
+`tools/generate-assets.mjs` 用 Node + sharp 生成三张透明底素材：
+
+| 素材 | 用途 |
+| --- | --- |
+| `aurora.png` | 设置页 hero 与对话区顶部的极淡极光洗色 |
+| `sprig.png` | hero 右下角的鼠尾草绿植物线稿 |
+| `halo.png` | 备用光环装饰 |
+
+素材由宿主半通过 `GET /api/perf-guard/assets/<name>.png` 提供（只读、1 天缓存、不带自定义头也可取）。
+重新生成：`node tools/generate-assets.mjs`（需要 sharp，脚本会回退到 DSH 解包目录里的副本）。
+
+### 跟随仿真测试
+
+`test/follow-sim.mjs` 在假 DOM 上驱动真实的跟随控制器，覆盖 7 个场景：
+贴底追底、滚轮上滚后不追、布局锚定不脱离、回到底部恢复、阅读时不点「回到底部」、跟随中点一次且节流、按住滚动条立即停止。
