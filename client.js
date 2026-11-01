@@ -690,13 +690,50 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * 对话区是否是「当前可见的那一层」。
+     * 设置页、插件页等是在对话之上覆盖的视图，对话 DOM 仍在（高度也非 0），
+     * 所以用中心点命中测试判断：命中的元素不在 [data-conversation-content] 里就说明被盖住了。
+     */
+    function isConversationActive() {
+      const content = document.querySelector('[data-conversation-content]')
+      if (content === null || content.getClientRects().length === 0) return false
+      const x = Math.round(window.innerWidth * 0.5)
+      const y = Math.round(window.innerHeight * 0.35)
+      const hit = document.elementFromPoint(x, y)
+      if (hit === null) return false
+      return content.contains(hit)
+    }
+
     function TodoPanel() {
       const [, force] = React.useState(0)
+      const [active, setActive] = React.useState(() => isConversationActive())
       React.useEffect(() => {
         const listener = () => force((value) => value + 1)
         todoStore.listeners.add(listener)
         return () => todoStore.listeners.delete(listener)
       }, [])
+      React.useEffect(() => {
+        let frame = 0
+        const evaluate = () => {
+          frame = 0
+          const next = isConversationActive()
+          setActive((current) => (current === next ? current : next))
+        }
+        const schedule = () => {
+          if (frame !== 0) return
+          frame = window.requestAnimationFrame(evaluate)
+        }
+        const timer = window.setInterval(schedule, 700)
+        const observer = new MutationObserver(schedule)
+        observer.observe(document.documentElement, { childList: true, subtree: true })
+        return () => {
+          window.clearInterval(timer)
+          observer.disconnect()
+          window.cancelAnimationFrame(frame)
+        }
+      }, [])
+      if (!active) return null
       if (todoStore.todos.length === 0) return null
       const order = { in_progress: 0, pending: 1, completed: 2 }
       const items = [...todoStore.todos].sort((left, right) => (order[left.status] ?? 3) - (order[right.status] ?? 3))
