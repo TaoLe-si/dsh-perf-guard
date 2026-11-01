@@ -16,10 +16,11 @@ import { readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { zstdDecompressSync } from 'node:zlib'
 
 export const inject = ['webServer']
 
-const VERSION = '0.7.1'
+const VERSION = '0.8.0'
 const ROUTE_PREFIX = '/api/perf-guard'
 const SESSION_SCAN_TTL_MS = 60 * 1000
 const MONITOR_INTERVAL_MS = 30 * 1000
@@ -354,6 +355,106 @@ async function* withRetryAndLogging(ctx, options, next) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  待办（todo_write）常驻：直接读会话日志，切会话/插话都不会丢           */
+/* ------------------------------------------------------------------ */
+
+/** 会话日志里找最后一次 todo_write 的 todos 数组。 */
+function extractTodos(lines) {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]
+    if (line === undefined || !/todo/i.test(line)) continue
+    let entry
+    try {
+      entry = JSON.parse(line)
+    } catch {
+      continue
+    }
+    const found = findTodoList(entry, 0)
+    if (found !== null) return found
+  }
+  return null
+}
+
+function looksLikeTodoList(list) {
+  return Array.isArray(list) && list.length > 0 && list.every((item) => item !== null && typeof item === 'object' && typeof item.content === 'string' && typeof item.status === 'string')
+}
+
+/** 递归找「像待办列表」的数组：元素含 content + status（todo/write 事件的快照形态）。 */
+function findTodoList(value, depth) {
+  if (depth > 10 || value === null || typeof value !== 'object') return null
+  if (looksLikeTodoList(value)) {
+    return value.map((item) => ({ content: item.content, status: item.status, activeForm: item.activeForm ? String(item.activeForm) : undefined }))
+  }
+  for (const key of Object.keys(value)) {
+    const found = findTodoList(value[key], depth + 1)
+    if (found !== null) return found
+  }
+  return null
+}
+
+function findTodosDeep(value, depth) {
+  if (depth > 8 || value === null || typeof value !== 'object') return null
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findTodosDeep(item, depth + 1)
+      if (found !== null) return found
+    }
+    return null
+  }
+  if (Array.isArray(value.todos) && value.todos.length > 0) {
+    return value.todos.map((item) => {
+      if (typeof item === 'string') return { content: item, status: 'pending' }
+      return {
+        content: String(item?.content ?? item?.text ?? ''),
+        status: String(item?.status ?? item?.state ?? 'pending'),
+        activeForm: item?.activeForm ? String(item.activeForm) : undefined,
+      }
+    }).filter((item) => item.content.length > 0)
+  }
+  for (const key of Object.keys(value)) {
+    const found = findTodosDeep(value[key], depth + 1)
+    if (found !== null) return found
+  }
+  return null
+}
+
+/** 在 <DSH_HOME>/sessions 下按 sessionId 找日志并解压（限制体积，避免拖垮宿主）。 */
+async function readTodosForSession(sessionId) {
+  if (!sessionId || !/^[A-Za-z0-9._-]+$/.test(sessionId)) return null
+  const root = join(dshHome(), 'sessions')
+  let workspaces = []
+  try {
+    workspaces = await readdir(root, { withFileTypes: true })
+  } catch {
+    return null
+  }
+  for (const workspace of workspaces) {
+    if (!workspace.isDirectory()) continue
+    const sessionDir = join(root, workspace.name, sessionId)
+    let files = []
+    try {
+      files = await readdir(sessionDir)
+    } catch {
+      continue
+    }
+    const log = files.find((name) => name.endsWith('.jsonl.zstd')) || files.find((name) => name.endsWith('.jsonl'))
+    if (log === undefined) continue
+    const full = join(sessionDir, log)
+    try {
+      const info = await stat(full)
+      if (info.size > 48 * 1024 * 1024) return { tooLarge: true, bytes: info.size }
+      const bytes = await readFile(full)
+      const text = log.endsWith('.zstd') ? zstdDecompressSync(bytes).toString('utf8') : bytes.toString('utf8')
+      const lines = text.split(/\r?\n/)
+      return { todos: extractTodos(lines) ?? [], bytes: info.size }
+    } catch {
+      continue
+    }
+  }
+  return null
+}
+
+/* ------------------------------------------------------------------ */
 /*  HTTP 路由                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -466,6 +567,16 @@ export function apply(ctx) {
     },
     {
       kind: 'exact',
+      path: ROUTE_PREFIX + '/todos',
+      handler: guard(['GET'], async (req, res) => {
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const sessionId = url.searchParams.get('sessionId') ?? ''
+        const result = await readTodosForSession(sessionId)
+        sendJson(res, 200, { ok: true, sessionId, ...(result ?? { todos: [] }) })
+      }),
+    },
+    {
+      kind: 'exact',
       path: ROUTE_PREFIX + '/retry',
       handler: guard(['GET', 'POST'], async (req, res) => {
         if (req.method === 'GET') {
@@ -525,5 +636,5 @@ export function apply(ctx) {
 }
 
 /** 仅供测试：错误分类、退避与偏好归一化。 */
-export const __internals = { statusOf, backoffMs, normalizePrefs, withRetryAndLogging, isTransportFailure }
+export const __internals = { statusOf, backoffMs, normalizePrefs, withRetryAndLogging, isTransportFailure, extractTodos }
 
