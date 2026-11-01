@@ -431,5 +431,5 @@ export function apply(ctx) {
 }
 
 /** 仅供测试：错误分类、退避与偏好归一化。 */
-export const __internals = { statusOf, backoffMs, normalizePrefs }
+export const __internals = { statusOf, backoffMs, normalizePrefs, withRetryAndLogging }
 

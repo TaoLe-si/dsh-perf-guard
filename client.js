@@ -778,6 +778,7 @@ window.__ModuleLoader__.load({
             h('div', { className: 'dsh-pg-card' }, h('em', null, '滚动容器'), h('strong', null, runtime.scroller ? '已连接' : '未找到')),
             h('div', { className: 'dsh-pg-card' }, h('em', null, '跟随状态'), h('strong', null, runtime.pinned ? '贴底跟随中' : '已脱离')),
             h('div', { className: 'dsh-pg-card' }, h('em', null, '思考行 发现/展开'), h('strong', null, runtime.thinkSeen + ' / ' + runtime.thinkOpened)),
+            h('div', { className: 'dsh-pg-card' }, h('em', null, '距底部'), h('strong', null, runtime.gap === undefined ? '-' : runtime.gap + ' px')),
             h('div', { className: 'dsh-pg-card' }, h('em', null, '跟随次数'), h('strong', null, String(runtime.follows))),
           ),
         ),
