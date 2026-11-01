@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url'
 
 export const inject = ['webServer']
 
-const VERSION = '0.7.0'
+const VERSION = '0.7.1'
 const ROUTE_PREFIX = '/api/perf-guard'
 const SESSION_SCAN_TTL_MS = 60 * 1000
 const MONITOR_INTERVAL_MS = 30 * 1000
@@ -202,7 +202,7 @@ function statusOf(failure, error) {
   return null
 }
 
-const TRANSPORT_PATTERN = /TRANSPORT|STREAM|terminated|Connection error|stream ended|socket hang up|ECONNRESET|other side closed|premature close|unexpected end/i
+const TRANSPORT_PATTERN = /TRANSPORT|STREAM|TRUNCATED|terminated|Connection error|stream ended|socket hang up|ECONNRESET|other side closed|premature close|unexpected end/i
 
 /** 无 HTTP 状态码的传输层/截断类失败。 */
 function isTransportFailure(failure, error, message) {
@@ -254,6 +254,7 @@ async function* withRetryAndLogging(ctx, options, next) {
   for (let attempt = 0; ; attempt += 1) {
     const attemptNumber = attempt + 1
     let emitted = false
+    let emittedChars = 0
     let sawFinish = false
     let pending = null
     try {
@@ -261,6 +262,7 @@ async function* withRetryAndLogging(ctx, options, next) {
       for await (const chunk of stream) {
         if (chunk !== null && typeof chunk === 'object' && chunk.type === 'finish') {
           sawFinish = true
+          const stopReason = String(chunk.reason?.stopReason ?? chunk.reason?.reason ?? chunk.reason?.kind ?? '')
           if (chunk.reason?.kind === 'error') {
             pending = { failure: chunk.reason.failure, chunk }
             break
@@ -269,10 +271,26 @@ async function* withRetryAndLogging(ctx, options, next) {
             yield chunk
             return
           }
+          // 输出被截断（length / max_tokens）时，pi-ai 仍按正常结束上报，
+          // 只能靠 finish 的 stopReason 识别；重试前先在日志里留下证据。
+          if (/length|max_tokens|max_output/i.test(stopReason)) {
+            if (prefs.logErrors) {
+              ctx.logger?.warn?.(
+                'perf-guard: output truncated (finish=%s, %s chars) · %s/%s · 重试通常无效，建议提高该模型的 maxTokens',
+                stopReason,
+                emittedChars,
+                options?.provider ?? '-',
+                options?.model ?? '-',
+              )
+            }
+            pending = { failure: { code: 'TRUNCATED', message: 'finish reason ' + stopReason + ' after ' + emittedChars + ' chars' }, chunk, truncated: true }
+            break
+          }
           yield chunk
           continue
         }
         emitted = true
+        emittedChars += typeof chunk?.delta === 'string' ? chunk.delta.length : 0
         yield chunk
       }
     } catch (error) {
@@ -309,6 +327,7 @@ async function* withRetryAndLogging(ctx, options, next) {
 
     if (!retryable) {
       if (pending.chunk !== undefined) {
+        // 截断的 finish 仍然要交给上层，否则这一轮会没有收尾事件。
         yield pending.chunk
         return
       }

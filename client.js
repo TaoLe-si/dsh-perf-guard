@@ -494,6 +494,8 @@ window.__ModuleLoader__.load({
       }
 
       function markFollow() {
+        // 回到贴底：立刻清掉手势窗口，否则刚滚回底部还要再等 700ms 才恢复跟随。
+        state.intentUntil = 0
         if (state.mode === 'follow') return
         state.mode = 'follow'
         if (env.onState) env.onState(state.mode)

@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>follow-sim</title>
+<style>
+  body { margin:0; font:14px/1.5 system-ui, sans-serif; }
+  #scroller { height: 600px; width: 800px; overflow-y: auto; border: 1px solid #ddd; position: relative; }
+  .turn { min-height: 120px; border-bottom: 1px dashed #eee; padding: 8px; }
+  .toBottomSlot { position: sticky; bottom: 8px; }
+  #out { position: fixed; right: 8px; top: 8px; width: 420px; background:#fff; border:1px solid #ccc; padding:8px; font:12px monospace; white-space: pre-wrap; }
+</style>
+<script>
+  window.__ModuleLoader__ = { load(definition) { window.__def = definition } }
+</script>
+<script src="../../client.js"></script>
+</head>
+<body>
+<div id="scroller"><div id="content"></div></div>
+<div class="toBottomSlot" hidden><button id="toBottom">bottom</button></div>
+<pre id="out">running…</pre>
+<script>
+const results = []
+function check(name, ok, detail) { results.push((ok ? 'PASS ' : 'FAIL ') + name + (detail ? ' :: ' + detail : '')) }
+
+const content = document.getElementById('content')
+const scroller = document.getElementById('scroller')
+const toBottomSlot = document.querySelector('.toBottomSlot')
+const toBottom = document.getElementById('toBottom')
+let toBottomClicks = 0
+const clickModes = []
+toBottom.addEventListener('click', () => {
+  toBottomClicks += 1
+  clickModes.push(window.__controller ? window.__controller.state.mode : 'unknown')
+  toBottomSlot.hidden = true
+  scroller.scrollTop = scroller.scrollHeight - scroller.clientHeight
+})
+
+// 先铺 6 个已存在的回合，并把视口贴到底
+for (let i = 0; i < 6; i += 1) {
+  const turn = document.createElement('div')
+  turn.className = 'turn'
+  turn.setAttribute('data-chat-turn', String(i))
+  turn.textContent = 'turn ' + i + ' ' + 'x'.repeat(40)
+  content.appendChild(turn)
+}
+scroller.scrollTop = scroller.scrollHeight - scroller.clientHeight
+
+const fakeReact = { createElement: () => null, useState: (v) => [v, () => {}], useEffect() {}, useCallback: (f) => f, memo: (f) => f }
+const mod = window.__def.factory((name) => {
+  if (name === 'react') return fakeReact
+  throw new Error('unexpected require: ' + name)
+})
+const { createFollowController } = mod.__internals
+
+const controller = createFollowController({
+  document, window, performance, MutationObserver,
+  scrollerSelector: '[data-conversation-scroll]',
+  isEnabled: () => true,
+  onRestore: () => { toBottomSlot.hidden = false },
+})
+scroller.setAttribute('data-conversation-scroll', '')
+// 控制器启动时要求容器已带标记，重建一次以选中它
+window.__controller = controller
+const stop = controller.start()
+
+const gap = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+async function appendTurn(text) {
+  const turn = document.createElement('div')
+  turn.className = 'turn'
+  turn.setAttribute('data-chat-turn', String(Date.now()))
+  turn.textContent = text
+  content.appendChild(turn)
+  await wait(60)
+}
+
+;(async () => {
+  try {
+    await wait(120)
+    const startMode = controller.state.mode
+    check('初始贴底即跟随', startMode === 'follow', 'mode=' + startMode)
+
+    // 1) 贴底追加内容 → 应自动追到底
+    await appendTurn('streaming chunk '.repeat(60))
+    await wait(400)
+    check('内容增长后追到底', gap() <= 24, 'gap=' + gap())
+
+    // 2) 用户滚轮上滚 → 之后不应再被拽下去
+    scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -160, bubbles: true }))
+    await wait(30)
+    const topAfterWheel = scroller.scrollTop
+    await appendTurn('more output '.repeat(80))
+    await wait(400)
+    check('上滚后停止跟随', Math.abs(scroller.scrollTop - topAfterWheel) < 40, 'delta=' + (scroller.scrollTop - topAfterWheel))
+    check('上滚后模式为阅读', controller.state.mode === 'reading', 'mode=' + controller.state.mode)
+
+    // 3) 阅读时不应点「回到底部」
+    toBottomClicks = 0
+    clickModes.length = 0
+    await appendTurn('reading phase '.repeat(60))
+    await wait(300)
+    check('阅读时不点回到底部', toBottomClicks === 0, 'clicks=' + toBottomClicks + ' modes=' + clickModes.join(','))
+
+    // 4) 手动滚回底部 → 恢复跟随
+    scroller.scrollTop = scroller.scrollHeight - scroller.clientHeight
+    scroller.dispatchEvent(new Event('scroll'))
+    await wait(60)
+    const beforeAppend = gap()
+    await appendTurn('resume '.repeat(60))
+    await wait(400)
+    check('回到底部恢复跟随', controller.state.mode === 'follow' && gap() <= 24, 'mode=' + controller.state.mode + ' gap=' + gap())
+  } catch (error) {
+    results.push('ERROR ' + (error && error.stack ? error.stack : error))
+  } finally {
+    document.getElementById('out').textContent = results.join('\n')
+    document.title = results.every((line) => line.startsWith('PASS')) ? 'ALL-PASS' : 'HAS-FAIL'
+    stop()
+  }
+})()
+</script>
+</body></html>

@@ -229,3 +229,13 @@ MIT
 
 `test/follow-sim.mjs` 在假 DOM 上驱动真实的跟随控制器，覆盖 7 个场景：
 贴底追底、滚轮上滚后不追、布局锚定不脱离、回到底部恢复、阅读时不点「回到底部」、跟随中点一次且节流、按住滚动条立即停止。
+
+## v0.7.1：真实浏览器仿真 + 截断识别
+
+- `test/fixture/follow.html` 在 **真实 Chromium（Edge headless）** 里跑跟随行为，真滚动、真布局、真 WheelEvent：
+  `msedge --headless=new --dump-dom --virtual-time-budget=15000 file:///…/test/fixture/follow.html`，6 项全部 PASS。
+- 修掉两个真问题：
+  1. 回到贴底后 700ms 手势窗口还在，导致「滚回底部也不跟」——现在贴底即清空手势窗口；
+  2. 阅读模式下仍可能点「回到底部」——现在只在 follow 模式点，且 900ms 节流。
+- 截断识别：`finish.reason.stopReason` 命中 `length/max_tokens/max_output` 时，记一条
+  `output truncated (finish=…, N chars)` 并计入「截断/传输中断重试」；同时提示「重试通常无效，建议提高该模型 maxTokens」。
