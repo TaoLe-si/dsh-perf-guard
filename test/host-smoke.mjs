@@ -31,7 +31,7 @@ test('backoffMs：优先使用 Retry-After', () => {
 
 test('normalizePrefs：缺省值与上限', () => {
   const prefs = normalizePrefs({ maxRetries: 99, statuses: { '503': false } })
-  assert.equal(prefs.maxRetries, 10)
+  assert.equal(prefs.maxRetries, 50)
   assert.equal(prefs.statuses['503'], false)
   assert.equal(prefs.statuses['429'], true)
   assert.equal(prefs.logErrors, true)
@@ -82,4 +82,7 @@ test('重试：已经输出过内容就不再重试，错误 chunk 原样透传'
   assert.equal(call, 1)
   assert.equal(chunks.length, 2)
   assert.equal(chunks[1].reason.kind, 'error')
+})
+test('normalizePrefs：-1 表示不设上限', () => {
+  assert.equal(normalizePrefs({ maxRetries: -1 }).maxRetries, -1)
 })

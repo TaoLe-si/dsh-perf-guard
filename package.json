@@ -1,6 +1,6 @@
 {
   "name": "dsh-perf-guard",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "DSH 性能守卫：长会话滚动降载、思考链自动展开、贴底跟随与宿主内存诊断。",
   "type": "module",
   "main": "index.js",
@@ -40,7 +40,8 @@
     "check": "node --check index.js && node --check client.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20",
+    "dsh": ">=0.2.1-rc.4"
   },
   "dsh": {
     "displayName": "性能守卫",

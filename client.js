@@ -34,6 +34,7 @@ window.__ModuleLoader__.load({
       smoothReveal: true,
       followTail: true,
       motion: true,
+      polish: true,
     })
     /** DOM 节点 / JS 堆到达该阈值时自动降载。 */
     const HEAVY_DOM_NODES = 12000
@@ -47,6 +48,7 @@ window.__ModuleLoader__.load({
       thinkOpened: 0,
       seatOpened: 0,
       follows: 0,
+      restores: 0,
       lastFollowAt: 0,
     }
 
@@ -108,6 +110,32 @@ window.__ModuleLoader__.load({
       '  [data-perfguard-motion="on"] .dsh-pg-enter,',
       '  [data-perfguard-motion="on"] [data-conversation-content].dsh-pg-session-enter { animation: none; }',
       '  .dsh-pg-switch, .dsh-pg-btn { transition: none; }',
+      '}',
+      /* ---- 全局动效：对话框 / 菜单 / 面板 / 列表项 / 按钮 ---- */
+      '@keyframes dsh-pg-pop { from { opacity: 0; transform: translateY(6px) scale(.985); } to { opacity: 1; transform: none; } }',
+      '@keyframes dsh-pg-slide-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }',
+      '[data-perfguard-motion="on"] [role="dialog"], [data-perfguard-motion="on"] [data-modal] { animation: dsh-pg-pop .2s cubic-bezier(.22,1,.36,1) both; }',
+      '[data-perfguard-motion="on"] [role="menu"], [data-perfguard-motion="on"] [role="listbox"], [data-perfguard-motion="on"] [data-dockkit-tab-menu] { animation: dsh-pg-fade-in .14s cubic-bezier(.4,0,.2,1) both; }',
+      '[data-perfguard-motion="on"] [data-dockkit-pane], [data-perfguard-motion="on"] [data-dockkit-float] { animation: dsh-pg-slide-in .22s cubic-bezier(.16,1,.3,1) both; }',
+      '[data-perfguard-motion="on"] [data-dockkit-tab] { transition: background-color .14s cubic-bezier(.4,0,.2,1), color .14s cubic-bezier(.4,0,.2,1), transform .14s cubic-bezier(.4,0,.2,1); }',
+      '[data-perfguard-motion="on"] [data-dockkit-tab]:active { transform: scale(.985); }',
+      '[data-perfguard-motion="on"] button, [data-perfguard-motion="on"] [role="button"] { transition: background-color .12s cubic-bezier(.4,0,.2,1), color .12s cubic-bezier(.4,0,.2,1), border-color .12s cubic-bezier(.4,0,.2,1), opacity .12s; }',
+      '[data-perfguard-motion="on"] [data-chat-turn] { animation: dsh-pg-turn-in .26s cubic-bezier(.22,1,.36,1) both; }',
+      /* ---- 界面质感：统一的圆角 / 留白 / 层次，降低「浏览器默认控件」感 ---- */
+      '[data-perfguard-polish="on"] [data-dockkit-tab] { border-radius: 10px; }',
+      '[data-perfguard-polish="on"] [data-dockkit-strip] { gap: 4px; padding-inline: 6px; }',
+      '[data-perfguard-polish="on"] [data-dockkit-pane], [data-perfguard-polish="on"] [data-dockkit-float] { border-radius: 14px; overflow: hidden; }',
+      '[data-perfguard-polish="on"] [data-conversation-content] { scroll-padding-block: 12px; }',
+      '[data-perfguard-polish="on"] [data-chat-turn] { scroll-margin-block: 14px; }',
+      '[data-perfguard-polish="on"] button:focus-visible, [data-perfguard-polish="on"] [role="button"]:focus-visible { outline-offset: 2px; border-radius: 8px; }',
+      '[data-perfguard-polish="on"] ::-webkit-scrollbar { width: 10px; height: 10px; }',
+      '[data-perfguard-polish="on"] ::-webkit-scrollbar-thumb { border-radius: 999px; background: var(--dsh-scrollbar-thumb, rgba(127,127,127,.28)); border: 3px solid transparent; background-clip: content-box; }',
+      '[data-perfguard-polish="on"] ::-webkit-scrollbar-thumb:hover { background: var(--dsh-scrollbar-thumb-hover, rgba(127,127,127,.45)); background-clip: content-box; }',
+      '[data-perfguard-polish="on"] ::-webkit-scrollbar-track { background: transparent; }',
+      '@media (prefers-reduced-motion: reduce) {',
+      '  [data-perfguard-motion="on"] [role="dialog"], [data-perfguard-motion="on"] [role="menu"],',
+      '  [data-perfguard-motion="on"] [data-dockkit-pane], [data-perfguard-motion="on"] [data-chat-turn] { animation: none; }',
+      '  [data-perfguard-motion="on"] button, [data-perfguard-motion="on"] [role="button"] { transition: none; }',
       '}',
       /* 设置页样式（全部走主题变量，深浅色自动跟随）。 */
       '.dsh-pg { display: flex; flex-direction: column; gap: 22px; max-width: 820px; padding: 10px 4px 40px; }',
@@ -192,6 +220,7 @@ window.__ModuleLoader__.load({
       root.dataset.perfguardClamp = prefs.clampTools ? 'on' : 'off'
       root.dataset.perfguardReveal = prefs.smoothReveal ? 'on' : 'off'
       root.dataset.perfguardMotion = prefs.motion ? 'on' : 'off'
+      root.dataset.perfguardPolish = prefs.polish ? 'on' : 'off'
     }
 
     /** 滚动期间给 <html> 打标，滚完 140ms 摘掉。 */
@@ -397,6 +426,8 @@ window.__ModuleLoader__.load({
       let frame = 0
       let active = null
       let intentUntil = 0
+      let pointerDown = false
+      let lastRestoreAt = 0
       const observed = new WeakSet()
       const positions = new WeakMap()
 
@@ -432,8 +463,23 @@ window.__ModuleLoader__.load({
         frame = window.requestAnimationFrame(tick)
       }
 
+      /**
+       * 贴底但 App 自己已经脱离跟随（它会渲染「回到底部」按钮）时，点一下它，
+       * 让 App 自己的 followingTail 状态机重新接管——比我们硬写 scrollTop 可靠。
+       */
+      function restoreAppFollow() {
+        const now = Date.now()
+        if (now - lastRestoreAt < 800) return
+        const button = document.querySelector('[class*="toBottomSlot"] button')
+        if (button === null) return
+        lastRestoreAt = now
+        runtime.restores += 1
+        button.click()
+      }
+
       function follow() {
         if (!isEnabled() || !pinned || frame !== 0) return
+        restoreAppFollow()
         frame = window.requestAnimationFrame(tick)
       }
 
@@ -458,7 +504,6 @@ window.__ModuleLoader__.load({
         const gap = bottomGap(element)
         const previous = positions.get(element)
         const movedUp = previous !== undefined && element.scrollTop < previous.top - 2
-        const jump = previous !== undefined ? Math.abs(element.scrollTop - previous.top) : 0
         positions.set(element, { top: element.scrollTop, height: element.scrollHeight })
         runtime.gap = Math.round(gap)
         runtime.scrollTop = Math.round(element.scrollTop)
@@ -467,9 +512,10 @@ window.__ModuleLoader__.load({
           runtime.pinned = true
           return
         }
-        // 解除条件：位置真的往上走，且要么刚有用户输入（滚轮/按键/拖动），
-        // 要么是一步大跳（拖动滚动条）。页面自锚定的小幅回退不再解除跟随。
-        if (movedUp && (Date.now() < intentUntil || jump > 160)) {
+        // 只有「用户正在操作」造成的上移才解除跟随：
+        // 滚轮/方向键（700ms 窗口）或按住滚动条拖动。
+        // 思维链展开、内容重排、浏览器滚动锚定都会让 scrollTop 回退，这些一律不算。
+        if (movedUp && (Date.now() < intentUntil || pointerDown)) {
           pinned = false
           runtime.pinned = false
         }
@@ -492,7 +538,13 @@ window.__ModuleLoader__.load({
 
       const onPointerDown = (event) => {
         const target = event.target
-        if (target instanceof Element && target.closest(SCROLL_SELECTOR) !== null) markIntent()
+        if (!(target instanceof Element) || target.closest(SCROLL_SELECTOR) === null) return
+        pointerDown = true
+        markIntent()
+      }
+
+      const onPointerUp = () => {
+        pointerDown = false
       }
 
       const onKeyDown = (event) => {
@@ -516,6 +568,7 @@ window.__ModuleLoader__.load({
       document.addEventListener('scroll', onScroll, { capture: true, passive: true })
       document.addEventListener('wheel', onWheel, { capture: true, passive: true })
       document.addEventListener('pointerdown', onPointerDown, { capture: true, passive: true })
+      document.addEventListener('pointerup', onPointerUp, { capture: true, passive: true })
       document.addEventListener('keydown', onKeyDown, { capture: true })
 
       return () => {
@@ -525,9 +578,37 @@ window.__ModuleLoader__.load({
         document.removeEventListener('scroll', onScroll, { capture: true })
         document.removeEventListener('wheel', onWheel, { capture: true })
         document.removeEventListener('pointerdown', onPointerDown, { capture: true })
+        document.removeEventListener('pointerup', onPointerUp, { capture: true })
         document.removeEventListener('keydown', onKeyDown, { capture: true })
       }
     }
+    /** 中键关闭标签页（dockkit 标签 chip 上的 [data-dockkit-tab-close]）。 */
+    function installMiddleClickClose() {
+      const onAuxClick = (event) => {
+        if (event.button !== 1) return
+        const target = event.target
+        if (!(target instanceof Element)) return
+        const tab = target.closest('[data-dockkit-tab]')
+        if (tab === null) return
+        const close = tab.querySelector('[data-dockkit-tab-close]')
+        if (close === null) return
+        event.preventDefault()
+        event.stopPropagation()
+        close.click()
+      }
+      // 中键按下时浏览器可能进入自动滚动模式，先拦掉。
+      const onMouseDown = (event) => {
+        if (event.button !== 1) return
+        if (event.target instanceof Element && event.target.closest('[data-dockkit-tab]') !== null) event.preventDefault()
+      }
+      document.addEventListener('auxclick', onAuxClick, true)
+      document.addEventListener('mousedown', onMouseDown, true)
+      return () => {
+        document.removeEventListener('auxclick', onAuxClick, true)
+        document.removeEventListener('mousedown', onMouseDown, true)
+      }
+    }
+
     /** 新回合淡入 + 会话切换整体过渡：只加 class，动画结束即摘除，不改布局。 */
     function installMotion(isEnabled) {
       const seen = new WeakSet()
@@ -643,7 +724,8 @@ window.__ModuleLoader__.load({
           title: '动效',
           hint: '新回合淡入上移 260ms、会话切换 240ms；曲线 easeOutQuint，系统「减少动态效果」时自动关闭。',
           rows: [
-            ['motion', '界面切换动画', '新回合出现与会话切换时做一次淡入位移；只挂 class，不改布局、不再重复播放。'],
+            ['motion', '界面动画', '新回合、会话切换、对话框、菜单、面板、按钮都做一次克制的过渡；动画只挂 class，不改布局，不再重复播放。'],
+            ['polish', '界面质感', '统一圆角与间距、细化滚动条、优化焦点环，降低浏览器默认控件感。'],
           ],
         },
         {
@@ -728,19 +810,34 @@ window.__ModuleLoader__.load({
                 h(
                   'div',
                   { className: 'dsh-pg-row', key: 'max' },
-                  h('div', { className: 'dsh-pg-row-main' }, h('b', null, '最大重试次数'), h('span', null, '每个请求的上限，0 表示不自动重试；指数退避 0.8s 起，429 优先用 Retry-After。')),
-                  h('input', {
-                    className: 'dsh-pg-input',
-                    type: 'number',
-                    min: 0,
-                    max: 10,
-                    value: retry.maxRetries,
-                    onChange: (event) => {
-                      const parsed = Number(event.target.value)
-                      const value = Number.isFinite(parsed) ? Math.max(0, Math.min(10, Math.round(parsed))) : 0
-                      saveRetry({ ...retry, maxRetries: value })
-                    },
-                  }),
+                  h(
+                    'div',
+                    { className: 'dsh-pg-row-main' },
+                    h('b', null, '最大重试次数'),
+                    h('span', null, retry.maxRetries < 0 ? '当前不设上限：失败会一直重试，遇到持续故障可能长时间卡住，可随时关掉右侧开关。' : '0 表示不自动重试；指数退避 0.8s 起，429 优先用 Retry-After。'),
+                  ),
+                  h(
+                    'div',
+                    { className: 'dsh-pg-actions' },
+                    h('span', { className: 'dsh-pg-desc' }, '不限'),
+                    h(Switch, {
+                      on: retry.maxRetries < 0,
+                      onToggle: () => saveRetry({ ...retry, maxRetries: retry.maxRetries < 0 ? 3 : -1 }),
+                    }),
+                    h('input', {
+                      className: 'dsh-pg-input',
+                      type: 'number',
+                      min: 0,
+                      max: 50,
+                      disabled: retry.maxRetries < 0,
+                      value: retry.maxRetries < 0 ? '' : retry.maxRetries,
+                      onChange: (event) => {
+                        const parsed = Number(event.target.value)
+                        const value = Number.isFinite(parsed) ? Math.max(0, Math.min(50, Math.round(parsed))) : 0
+                        saveRetry({ ...retry, maxRetries: value })
+                      },
+                    }),
+                  ),
                 ),
                 ...Object.entries({ '400': '参数错误', '401': '鉴权失败', '402': '余额不足', '403': '无权限', '429': '限流', '502': '网关错误', '503': '服务不可用' }).map(([status, label]) =>
                   h(
@@ -779,7 +876,7 @@ window.__ModuleLoader__.load({
             h('div', { className: 'dsh-pg-card' }, h('em', null, '跟随状态'), h('strong', null, runtime.pinned ? '贴底跟随中' : '已脱离')),
             h('div', { className: 'dsh-pg-card' }, h('em', null, '思考行 发现/展开'), h('strong', null, runtime.thinkSeen + ' / ' + runtime.thinkOpened)),
             h('div', { className: 'dsh-pg-card' }, h('em', null, '距底部'), h('strong', null, runtime.gap === undefined ? '-' : runtime.gap + ' px')),
-            h('div', { className: 'dsh-pg-card' }, h('em', null, '跟随次数'), h('strong', null, String(runtime.follows))),
+            h('div', { className: 'dsh-pg-card' }, h('em', null, '跟随次数 / 重挂跟随'), h('strong', null, runtime.follows + ' / ' + runtime.restores)),
           ),
         ),
         sessions && sessions.largest.length > 0
@@ -821,6 +918,7 @@ window.__ModuleLoader__.load({
       ctx.effect(() => installAutoExpandThinking(() => readPrefs().autoExpandThinking))
       ctx.effect(() => installFollowTail(() => readPrefs().followTail))
       ctx.effect(() => installMotion(() => readPrefs().motion))
+      ctx.effect(() => installMiddleClickClose())
 
       ctx.slots.inject('settings.section', () =>
         ctx.slots.register(

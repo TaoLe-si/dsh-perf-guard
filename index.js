@@ -18,7 +18,7 @@ import { join } from 'node:path'
 
 export const inject = ['webServer']
 
-const VERSION = '0.5.0'
+const VERSION = '0.6.0'
 const ROUTE_PREFIX = '/api/perf-guard'
 const SESSION_SCAN_TTL_MS = 60 * 1000
 const MONITOR_INTERVAL_MS = 30 * 1000
@@ -55,7 +55,8 @@ let retryPrefs = null
 function normalizePrefs(raw) {
   const prefs = {
     logErrors: typeof raw?.logErrors === 'boolean' ? raw.logErrors : DEFAULT_RETRY_PREFS.logErrors,
-    maxRetries: Number.isInteger(raw?.maxRetries) ? Math.max(0, Math.min(10, raw.maxRetries)) : DEFAULT_RETRY_PREFS.maxRetries,
+    // -1 = 不设上限；其余 0–50。用户可以在设置页选择「不限」。
+    maxRetries: Number.isInteger(raw?.maxRetries) && raw.maxRetries >= -1 ? Math.min(50, raw.maxRetries) : DEFAULT_RETRY_PREFS.maxRetries,
     statuses: { ...DEFAULT_RETRY_PREFS.statuses },
   }
   for (const status of WATCHED_STATUSES) {
@@ -265,7 +266,7 @@ async function* withRetryAndLogging(ctx, options, next) {
     const retryable = key !== null
       && prefs.statuses[key] === true
       && !emitted
-      && attemptNumber <= prefs.maxRetries
+      && (prefs.maxRetries < 0 || attemptNumber <= prefs.maxRetries)
       && options?.signal?.aborted !== true
 
     if (!retryable) {
@@ -280,7 +281,7 @@ async function* withRetryAndLogging(ctx, options, next) {
     ctx.logger?.warn?.(
       'perf-guard: retry %s/%s in %sms after HTTP %s',
       attemptNumber,
-      prefs.maxRetries,
+      prefs.maxRetries < 0 ? 'inf' : prefs.maxRetries,
       delay,
       info.status,
     )
