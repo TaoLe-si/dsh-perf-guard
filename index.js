@@ -20,7 +20,7 @@ import { zstdDecompressSync } from 'node:zlib'
 
 export const inject = ['webServer']
 
-const VERSION = '1.0.3'
+const VERSION = '1.0.4'
 const ROUTE_PREFIX = '/api/perf-guard'
 const SESSION_SCAN_TTL_MS = 60 * 1000
 const MONITOR_INTERVAL_MS = 30 * 1000
@@ -251,6 +251,26 @@ function isTransportFailure(failure, error, message) {
   return TRANSPORT_PATTERN.test(text) || isUpstreamStall(text)
 }
 
+/**
+ * 从错误正文里读服务端自己给出的等待秒数。
+ *
+ * Cloudflare / 网关的 502、503 正文常带 `"retry_after":60` 与
+ * "wait and retry, back off for at least N seconds"。pi-ai 未必把它抬到
+ * `providerRetryAfterMs`，所以这里补一条正文兜底；具体等待仍由
+ * {@link backoffMs} 的封顶决定。
+ *
+ * @param {string} message - 错误正文。
+ * @returns {number | null} 秒数，没有则为 null。
+ */
+function retryAfterFromMessage(message) {
+  if (typeof message !== 'string' || message.length === 0) return null
+  const jsonField = /"retry_after"\s*:\s*(\d+(?:\.\d+)?)/.exec(message)
+  if (jsonField !== null) return Number(jsonField[1])
+  const header = /retry-after\s*[:=]\s*(\d+)/i.exec(message)
+  if (header !== null) return Number(header[1])
+  return null
+}
+
 function describeFailure(failure, error, options, attempt) {
   const message = messageOf(failure, error)
   const status = statusOf(failure, error)
@@ -262,9 +282,54 @@ function describeFailure(failure, error, options, attempt) {
     provider: options?.provider ?? null,
     model: options?.model ?? null,
     attempt,
-    retryAfterMs: failure && Number.isFinite(failure.providerRetryAfterMs) ? failure.providerRetryAfterMs : null,
+    retryAfterMs: failure && Number.isFinite(failure.providerRetryAfterMs)
+      ? failure.providerRetryAfterMs
+      : (() => {
+          const seconds = retryAfterFromMessage(message)
+          return seconds === null ? null : seconds * 1000
+        })(),
     message: message.slice(0, 600),
   }
+}
+
+/** 允许在「已输出部分内容」后整段重来的网关类状态码。 */
+const PARTIAL_RETRY_STATUSES = new Set(['500', '502', '503', '504'])
+
+/**
+ * 判定一次失败是否应当重试。
+ *
+ * 纯函数，便于在不动真实重试配置的前提下覆盖整张矩阵。
+ *
+ * 规则：
+ * - 状态码类：配置里开着该状态即可重试。**已输出部分内容后**只有
+ *   {@link PARTIAL_RETRY_STATUSES}（500/502/503/504）在「截断 / 传输中断重试」开关
+ *   打开时仍可重试——那个开关的语义正是"允许丢弃已输出内容、整段重来"。
+ *   502 常常是在流到一半时由网关返回的，正文是完整的错误 JSON，半截输出没有价值。
+ *   429 与 4xx 保持既有语义：已输出后不重试。
+ * - 传输 / 截断 / 上游空转：由同一开关控制，不受是否已输出限制。
+ * - 用户取消（signal.aborted）永不重试；`maxRetries` < 0 表示不限。
+ *
+ * @param {object} args
+ * @param {object} args.prefs - 归一化后的重试偏好。
+ * @param {{ status: number|null, kind: string }} args.info - 本次失败的分类结果。
+ * @param {boolean} args.emitted - 本轮是否已经向调用方吐出过内容。
+ * @param {number} args.attemptNumber - 当前是第几次尝试（从 1 起）。
+ * @param {boolean} args.aborted - 调用方的 signal 是否已中止。
+ * @returns {boolean} 是否重试。
+ */
+function shouldRetry({ prefs, info, emitted, attemptNumber, aborted }) {
+  const key = info.status === null ? null : String(info.status)
+  const statusEnabled = key !== null && prefs.statuses[key] === true
+  // 网关类 5xx 常常是在流到一半时返回的：正文是一整段错误 JSON，半截输出没有价值。
+  // 仅在「截断 / 传输中断重试」开关打开时允许丢弃已输出内容重来；
+  // 429 与 4xx 保持既有语义（已输出后不重试），避免把限流/参数错误打成循环。
+  const partialRetryable = emitted === false
+    || (prefs.retryTransport === true && key !== null && PARTIAL_RETRY_STATUSES.has(key))
+  const statusRetry = statusEnabled && partialRetryable
+  const transportRetry = info.kind === 'transport' && prefs.retryTransport === true
+  return (statusRetry || transportRetry)
+    && (prefs.maxRetries < 0 || attemptNumber <= prefs.maxRetries)
+    && aborted !== true
 }
 
 function backoffMs(info, attempt) {
@@ -356,13 +421,13 @@ async function* withRetryAndLogging(ctx, options, next) {
       )
     }
 
-    const key = info.status === null ? null : String(info.status)
-    const httpRetry = key !== null && prefs.statuses[key] === true && !emitted
-    // 传输中断 / 截断：允许在已输出部分内容后重试（整段重来），由用户开关控制。
-    const transportRetry = info.kind === 'transport' && prefs.retryTransport === true
-    const retryable = (httpRetry || transportRetry)
-      && (prefs.maxRetries < 0 || attemptNumber <= prefs.maxRetries)
-      && options?.signal?.aborted !== true
+    const retryable = shouldRetry({
+      prefs,
+      info,
+      emitted,
+      attemptNumber,
+      aborted: options?.signal?.aborted === true,
+    })
 
     if (!retryable) {
       if (pending.chunk !== undefined) {
@@ -706,5 +771,5 @@ export function apply(ctx) {
 }
 
 /** 仅供测试：错误分类、退避与偏好归一化。 */
-export const __internals = { statusOf, backoffMs, normalizePrefs, withRetryAndLogging, isTransportFailure, extractTodos }
+export const __internals = { statusOf, backoffMs, normalizePrefs, withRetryAndLogging, isTransportFailure, shouldRetry, retryAfterFromMessage, extractTodos }
 

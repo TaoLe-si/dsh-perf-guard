@@ -2,7 +2,15 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { __internals } from '../index.js'
 
-const { statusOf, backoffMs, normalizePrefs, withRetryAndLogging, isTransportFailure } = __internals
+const {
+  statusOf,
+  backoffMs,
+  normalizePrefs,
+  withRetryAndLogging,
+  isTransportFailure,
+  shouldRetry,
+  retryAfterFromMessage,
+} = __internals
 
 test('statusOf：优先读 failure.status', () => {
   assert.equal(statusOf({ status: 429, message: 'x' }, undefined), 429)
@@ -112,6 +120,105 @@ test('isTransportFailure：上游「没有产出，请稍后重试」也归入�
   assert.equal(isTransportFailure(undefined, new Error('余额不足，请稍后重试')), false)
   assert.equal(isTransportFailure(undefined, new Error('上游繁忙，请稍后重试')), true)
   assert.equal(isTransportFailure(undefined, new Error('gateway timeout, please retry later')), true)
+})
+
+test('shouldRetry：网关 5xx 在已输出内容后，整段重试开关开着就重试', () => {
+  const base = normalizePrefs({})
+  // 默认只监听 429/502/503；500/504 需要显式打开才谈得上重试。
+  const prefs = { ...base, statuses: { ...base.statuses, '500': true, '504': true } }
+  for (const status of [500, 502, 503, 504]) {
+    const info = { status, kind: 'http' }
+    assert.equal(shouldRetry({ prefs, info, emitted: true, attemptNumber: 1, aborted: false }), true, String(status))
+    // 关掉「截断 / 传输中断重试」就不再丢弃已输出内容。
+    const noDiscard = { ...prefs, retryTransport: false }
+    assert.equal(
+      shouldRetry({ prefs: noDiscard, info, emitted: true, attemptNumber: 1, aborted: false }),
+      false,
+      String(status),
+    )
+    // 尚未输出时不受该开关限制。
+    assert.equal(shouldRetry({ prefs: noDiscard, info, emitted: false, attemptNumber: 1, aborted: false }), true)
+  }
+  // 用户取消优先。
+  assert.equal(
+    shouldRetry({ prefs, info: { status: 502, kind: 'http' }, emitted: true, attemptNumber: 1, aborted: true }),
+    false,
+  )
+})
+
+test('shouldRetry：429 / 4xx 已输出后仍不重试（不改变既有语义）', () => {
+  const base = normalizePrefs({})
+  for (const status of [429, 400, 401, 403]) {
+    const prefs = { ...base, statuses: { ...base.statuses, [String(status)]: true } }
+    const info = { status, kind: 'http' }
+    assert.equal(shouldRetry({ prefs, info, emitted: true, attemptNumber: 1, aborted: false }), false, String(status))
+    assert.equal(shouldRetry({ prefs, info, emitted: false, attemptNumber: 1, aborted: false }), true, String(status))
+  }
+})
+
+test('shouldRetry：maxRetries 上限与「不限」', () => {
+  const prefs = { ...normalizePrefs({}), maxRetries: 2 }
+  const info = { status: 502, kind: 'http' }
+  assert.equal(shouldRetry({ prefs, info, emitted: true, attemptNumber: 2, aborted: false }), true)
+  assert.equal(shouldRetry({ prefs, info, emitted: true, attemptNumber: 3, aborted: false }), false)
+  const unlimited = { ...prefs, maxRetries: -1 }
+  assert.equal(shouldRetry({ prefs: unlimited, info, emitted: true, attemptNumber: 99, aborted: false }), true)
+})
+
+test('shouldRetry：传输类不受是否已输出限制', () => {
+  const prefs = normalizePrefs({})
+  const info = { status: null, kind: 'transport' }
+  assert.equal(shouldRetry({ prefs, info, emitted: true, attemptNumber: 1, aborted: false }), true)
+  assert.equal(
+    shouldRetry({ prefs: { ...prefs, retryTransport: false }, info, emitted: true, attemptNumber: 1, aborted: false }),
+    false,
+  )
+})
+
+test('retryAfterFromMessage：读 Cloudflare 正文里的 retry_after', () => {
+  const body = '502 {"error_name":"origin_bad_gateway","retryable":true,"retry_after":60}'
+  assert.equal(retryAfterFromMessage(body), 60)
+  assert.equal(retryAfterFromMessage('Retry-After: 5'), 5)
+  assert.equal(retryAfterFromMessage('boom'), null)
+  assert.equal(retryAfterFromMessage(''), null)
+  assert.equal(retryAfterFromMessage(undefined), null)
+})
+
+test('backoffMs：服务端给的 60s 被现有封顶压到 30s', () => {
+  assert.equal(backoffMs({ status: 502, retryAfterMs: 60000 }, 0), 30000)
+})
+
+test('502 在流到一半时返回：重试并交付完整流', async () => {
+  const chunks = []
+  const warnings = []
+  const fakeCtx = { logger: { warn: (...args) => warnings.push(args) } }
+  const text = { type: 'text-delta', delta: 'good' }
+  const stop = { type: 'finish', reason: { kind: 'stop' } }
+  // 真实形态：Cloudflare 502 正文，带 retry_after。用 0 让用例跑得快。
+  const failure = {
+    status: 502,
+    code: 'SERVER',
+    message: '502 {"error_name":"origin_bad_gateway","retry_after":0}',
+  }
+  let call = 0
+  const next = async () => {
+    call += 1
+    return (async function* () {
+      if (call === 1) {
+        yield { type: 'text-delta', delta: 'partial' }
+        yield { type: 'finish', reason: { kind: 'error', failure } }
+        return
+      }
+      yield text
+      yield stop
+    })()
+  }
+  for await (const chunk of withRetryAndLogging(fakeCtx, { provider: 'p', model: 'm' }, next)) chunks.push(chunk)
+  assert.equal(call, 2)
+  // 中间件是边收边转发的，已经交给调用方的 'partial' 收不回来；
+  // 第二次尝试从干净状态重新产出。这与既有"传输中断整段重试"的行为一致。
+  assert.deepEqual(chunks, [{ type: 'text-delta', delta: 'partial' }, text, stop])
+  assert.ok(warnings.some((args) => String(args[0]).includes('perf-guard: retry') && args[1] === 1))
 })
 
 test('传输中断：即使已输出内容也整段重试', async () => {
