@@ -20,7 +20,7 @@ import { zstdDecompressSync } from 'node:zlib'
 
 export const inject = ['webServer']
 
-const VERSION = '0.9.2'
+const VERSION = '1.0.0'
 const ROUTE_PREFIX = '/api/perf-guard'
 const SESSION_SCAN_TTL_MS = 60 * 1000
 const MONITOR_INTERVAL_MS = 30 * 1000

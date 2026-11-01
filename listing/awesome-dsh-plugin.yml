@@ -1,0 +1,8 @@
+# awesome-dsh-plugin 投稿文件
+# 目标路径：awesome-dsh-plugin/awesome-dsh-plugin → data/plugins/taole-si__dsh-perf-guard.yml
+url: https://github.com/TaoLe-si/dsh-perf-guard
+name: TaoLe-si/dsh-perf-guard
+category: tools
+description:
+  en: Keeps long DSH sessions usable with tail-following, auto-expanded reasoning, retries for truncated or transport-failed model calls, a persistent todo panel and off-screen render skipping.
+  zh: 让 DSH 长会话更可用：贴底跟随、思考链自动展开、截断与传输失败自动重试、待办常驻面板与离屏渲染降载。

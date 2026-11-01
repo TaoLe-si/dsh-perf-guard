@@ -1,7 +1,7 @@
 {
   "name": "dsh-perf-guard",
-  "version": "0.9.2",
-  "description": "DSH 性能守卫：长会话滚动降载、思考链自动展开、贴底跟随与宿主内存诊断。",
+  "version": "1.0.0",
+  "description": "DSH 长会话优化插件：贴底跟随、思考链自动展开、截断/传输失败自动重试、待办常驻面板、离屏渲染降载。",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -14,9 +14,9 @@
     "client.js",
     "cordis.patch.yml",
     "assets/",
-    "tools/",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "keywords": [
     "deepseek-harness",
@@ -25,7 +25,9 @@
     "cordis",
     "performance",
     "transcript",
-    "scroll"
+    "scroll",
+    "todo",
+    "retry"
   ],
   "license": "MIT",
   "author": "TaoLe-si",
@@ -47,7 +49,7 @@
   },
   "dsh": {
     "displayName": "性能守卫",
-    "description": "长会话滚动降载、思考链自动展开、贴底跟随",
+    "description": "长会话滚动降载、贴底跟随、截断重试、待办常驻",
     "bundle": {
       "patch": "./cordis.patch.yml"
     },

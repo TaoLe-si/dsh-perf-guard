@@ -1,241 +1,113 @@
 # dsh-perf-guard
 
-DSH（DeepSeek Harness）的**长会话性能守卫 + 阅读体验增强**插件。
+DSH（DeepSeek Harness）的长会话体验插件：**贴底跟随、思考链自动展开、截断/传输失败重试、待办常驻、离屏降载**。
 
-长上下文、多轮会话、`transcriptView: verbose` 时，transcript 会把每一步工具调用都渲染成独立 DOM，
-滚动时浏览器仍要为屏幕外的块做样式计算、布局与合成，于是越聊越卡；
-默认折叠的思考链和「要不要跟到底部」的判断也在拖慢阅读节奏。
-
-本插件只改**渲染与交互**，不动任何会话数据。
+只改行为，**不改任何主题、配色或布局**。
 
 ## 功能
 
-### 滚动与渲染
+### 1. 自动跟随（默认开）
 
-| 能力 | 默认 | 说明 |
+- 贴底时，新内容到达后用 rAF 缓动追到最新一行（每帧逼近 45%），不是瞬移。
+- 向上滚动（滚轮 / PageUp↑ / 拖动滚动条）立即脱离；内容重排、浏览器滚动锚定**不会**被误判成用户上滚。
+- 回到底部 24px 内自动恢复跟随。
+- 跟随中若宿主自己已脱离（渲染了「回到底部」按钮），点它一次让宿主的 `followingTail` 状态机自愈，节流 900ms。
+- 阅读态（非贴底）**绝不**写 `scrollTop`，也不会点「回到底部」。
+
+### 2. 思考链自动展开（默认开）
+
+- 只展开正在流式输出的思考行（`[data-variant="think"][data-state="running"]`）。
+- 过程组折叠时思考行不在 DOM 里：先用 `[data-streaming] / [data-shimmer]` 判断"正在输出"，再展开最新的过程组。
+- 历史回合保持折叠；用户手动收起过的行记入 `WeakSet`，不再自动打开。
+
+### 3. 截断 / 传输失败重试（默认开，可配）
+
+| 类别 | 识别方式 | 默认 |
 | --- | --- | --- |
-| 离屏过程块跳过渲染 | 开 | `[data-step-process]` / `[data-turn-process]` 加 `content-visibility: auto` + `contain-intrinsic-size`，屏幕外的步骤不再付布局与绘制成本 |
-| 整回合离屏跳过（实验） | 关 | 把上一条提升到整条 `[data-chat-turn]`。长会话收益最大；若滚动位置偶尔跳动就关掉 |
-| 工具输出限高 | 开 | 回合内 `pre`、过程体限高并内部滚动，避免单条消息撑出几万像素 |
-| 滚动期间降载 | 开 | 滚动时暂停动画/过渡、关掉 `backdrop-filter`，停手 140ms 后恢复 |
-| 自动降载 | 开 | DOM > 12000 节点或 JS 堆 > 1.1GB 时自动切到整回合离屏跳过 |
+| HTTP 400 / 401 / 402 / 403 | `LlmError.status` 或消息前缀 | 只记日志 |
+| HTTP 429 / 502 / 503 | 同上 | 重试 |
+| `TRANSPORT` / `STREAM_*` / `timeout` | 错误码或消息 | 重试 |
+| 静默截断 | 流结束但没有 `finish` chunk | 重试 |
+| 长度截断 | `finish.reason.stopReason` 命中 `length/max_tokens/max_output` | 重试并记录 |
 
-### 思考链与跟随
+- 上限 0–50，或**不限**（`maxRetries = -1`）。
+- HTTP 状态类只在**本轮尚未输出内容**时重试；传输/截断允许整段重试，日志标 `(partial output discarded)`。
+- `ABORTED` / `CANCELLED`（用户取消）永不重试；429 优先 `Retry-After`，其余指数退避（0.8s 起，封顶 15s）。
+- ⚠️ 长度截断重试通常仍会截断，根治是把该模型的 `maxTokens` 调大。
 
-| 能力 | 默认 | 说明 |
-| --- | --- | --- |
-| 自动展开思考链 | 开 | 只展开 `data-state="running"` 的思考行；过程组折叠时先展开最新回合的过程组，再展开思考行。历史回合保持折叠，避免 DOM 膨胀；手动收起过的行记入 WeakSet，不再自动打开 |
-| 展开平滑动画 | 开 | 思考行/过程体展开时 180–200ms 淡入上移；`prefers-reduced-motion` 下自动取消 |
-| 跟随最新输出 | 开 | 贴底时用 rAF 缓动追到最新一行（每帧逼近 30%）；向上滚动 >64px 立刻脱离；回到底部 24px 内自动恢复 |
+### 4. 待办常驻面板（默认开）
 
-跟随判定不看滚轮方向，只看 `scrollTop` 是否真的变小，所以「内容变高」不会被误判成用户上滚；
-过程体/工具输出里的嵌套滚动也不会让主滚动条脱离跟随。
+- 数据源：`~/.dsh/storages/session_projcache/sessions/<sessionId>.json` 的 `todos.val`（与 UI 同源），日志解析作兜底。
+- 渲染在 `shell.overlay` 常驻层：切会话、插入消息都不会消失；无待办时不占位。
+- 按 `in_progress → pending → completed` 排序，完成项划线降透明；每会话 localStorage 缓存兜底。
 
-### 宿主诊断
+### 5. 长会话降载（默认开）
 
-- 每 30s 采样宿主 RSS，超过 2GB 打 warn（提前暴露 OOM 风险，不改变行为）。
-- `GET /api/perf-guard/stats`：宿主内存 + `~/.dsh/sessions` 日志体积排行（60s 缓存，需要 `x-dsh-plugin: perf-guard` 头与正常登录态）。
-- `GET /api/perf-guard/health`：版本探活。
-
-## 设置页
-
-插件注册了独立的设置页 **设置 → 性能守卫**（`settings.section` 槽，`id: perf-guard`），包含：
-
-- 分组开关（思考链与跟随 / 滚动与渲染），即时生效；
-- 实时指标：渲染进程 JS 堆、DOM 节点数、宿主 RSS、会话日志总量；
-- 最大的会话日志排行（指出真正撑爆内存的会话）；
-- 「立即采样」「恢复默认」。
-
-开关持久化在 `localStorage['dsh-perf-guard:prefs']`。
+- 离屏过程块 `content-visibility: auto`（整回合版本为实验项，默认关）。
+- 工具输出限高并内部滚动。
+- 滚动期间暂停动画与毛玻璃合成，停手 140ms 恢复。
+- DOM > 12000 节点或 JS 堆 > 1.1GB 时自动切保守模式。
 
 ## 安装
 
-### 从 npm / 本地路径安装（推荐）
-
 ```bash
-# 已发布到 npm 时
-dsh plugin --profile desktop add dsh-perf-guard
+# 从 GitHub 安装（无需发 npm）
+dsh plugin --profile desktop add github:TaoLe-si/dsh-perf-guard
 
-# 本地开发（软链整个目录）
+# 本地开发
 dsh plugin --profile desktop add link:/absolute/path/to/dsh-perf-guard
 ```
 
-包内 `cordis.patch.yml` 会把宿主半挂成 `perf-guard` 一行；浏览器半由 `package.json` 的 `dsh.client` 自动进入客户端模块图。
-
-### 手动安装（不想动 profile 依赖）
-
-1. 把本仓库放到 `<profile>/node_modules/dsh-perf-guard`（或建 junction/symlink 指过来）；
-2. 在 `<profile>/cordis.patch.yml` 末尾加：
+手动安装：
 
 ```yaml
+# <profile>/cordis.patch.yml 末尾
 - insert:
     - id: perf-guard
       name: dsh-perf-guard
 ```
 
-3. 宿主半随补丁层热重载；浏览器半需要刷新一次界面（Ctrl+R）。
+宿主半热重载；浏览器半需要刷新一次界面（Ctrl+R）。
 
-## 卸载 / 回滚
+## 设置
 
-1. 删掉 `<profile>/cordis.patch.yml` 里的 `insert` 行（或 `dsh plugin --profile desktop remove dsh-perf-guard`）；
-2. 刷新界面，设置页消失、所有注入的样式与监听随插件卸载移除；
-3. 需要清干净时删除 `node_modules/dsh-perf-guard` 与 `localStorage['dsh-perf-guard:prefs']`。
+**设置 → 性能守卫**（`settings.section`，id `perf-guard`）：思考链与跟随、错误与重试（含状态码开关与「不限」）、自检（滚动容器/跟随状态/思考行计数/距底部）、会话日志体积排行。
 
-## 工作原理
+开关存 `localStorage['dsh-perf-guard:prefs']`；重试配置存 `~/.dsh/perf-guard.retry.json`。
 
-插件依赖 `@deepseek-ai/dsh-client-ui-chat@0.2.1-rc.4` 暴露的稳定 DOM 契约：
+## 宿主接口
 
-```text
-[data-conversation-scroll]      滚动容器
-[data-chat-turn]                回合
-[data-step-process]             过程组（思考/工具块）
-[data-step-process-body]        过程组内容，内部可滚动
-[data-variant="think"]         思考行
-[data-state="running"|"ok"]   思考行状态
-[data-streaming]                正在流式输出
-```
+| 路径 | 说明 |
+| --- | --- |
+| `GET /api/perf-guard/health` | 版本探活 |
+| `GET /api/perf-guard/stats` | 宿主内存、会话日志排行、重试配置、最近错误 |
+| `GET /api/perf-guard/todos?sessionId=` | 该会话待办快照 |
+| `GET/POST /api/perf-guard/retry` | 读取/更新重试配置 |
 
-全部逻辑都是「观察 + 最小干预」：只点击折叠按钮、只写 `scrollTop`、只注入 CSS，不改 React 树、不碰会话文件。
-
-## 可调参数
-
-都在 `client.js` 顶部附近：
-
-| 参数 | 默认 | 含义 |
-| --- | --- | --- |
-| `HEAVY_DOM_NODES` | 12000 | 自动降载的 DOM 节点阈值 |
-| `HEAVY_HEAP_BYTES` | 1.1GB | 自动降载的 JS 堆阈值 |
-| 脱离 / 恢复距离 | 64px / 24px | 跟随最新输出的判定 |
-| 缓动系数 | 0.3 | 每帧逼近剩余距离的比例 |
-| 开组时间闸 | 800ms | 流式期间自动展开过程组的最高频率 |
-
-## 开发
-
-```bash
-node --check index.js && node --check client.js
-node test/client-smoke.mjs     # 假 DOM + 假 slots 的装配冒烟测试
-```
+除 `/assets/*` 外均要求 `x-dsh-plugin: perf-guard` 头。
 
 ## 兼容性
 
-- 目标：DSH 0.2.1-rc.x（`ui-chat` 的 `data-*` 契约）。DSH 大版本升级后请复核上面的选择器。
-- 只做渲染层优化，不减少宿主解压会话日志的内存峰值；超大日志仍需删档或离线裁剪。
-- `content-visibility` 会让屏幕外内容暂时不可被页内查找命中；可用开关关闭。
+- 基线 `engines.dsh: ">=0.2.1-rc.4"`；低于基线的内核会被 DSH 直接禁用，无法挂载。
+- DOM 契约来自 `@deepseek-ai/dsh-client-ui-chat@0.2.1-rc.4`，大版本升级需复核选择器。
+
+## 测试
+
+```bash
+npm test
+```
+
+- `test/host-smoke.mjs`：状态码解析、退避、偏好归一化、重试中间件（429 重试 / 已输出不重试 / 传输中断重试 / 静默截断重试）。
+- `test/follow-sim.mjs`：假 DOM 驱动真实跟随控制器，7 个场景。
+- `test/client-smoke.mjs`：客户端装配冒烟。
+- `test/fixture/follow.html`：真浏览器仿真（Edge headless，6 项断言）。
+
+## 已知限制
+
+- 长度截断（`max_tokens`）重试通常无效，应调大模型 `maxTokens`。
+- 待办面板依赖投影缓存文件；缺失时退回会话日志解析。
+- 仅做渲染层优化，不降低宿主解压会话日志的内存峰值。
 
 ## License
 
 MIT
-## 自检 / 排查
-
-设置页底部有「自检」分组，直接显示：
-
-- 滚动容器：是否找到 `[data-conversation-scroll]`（多个容器时取最大的可见那个）；
-- 跟随状态：当前是「贴底跟随中」还是「已脱离」；
-- 思考行 发现/展开：`WeakSet` 去重后的计数；
-- 跟随次数。
-
-也可以在 DevTools Console 里执行 `window.__dshPerfGuard` 查看实时状态。
-
-常见原因：
-
-| 现象 | 原因 |
-| --- | --- |
-| 自检里滚动容器「未找到」 | 当前不在对话页，或 DSH 版本换了容器标记 |
-| 跟随状态长期「已脱离」 | 上一次是向上滚动离开的；滚回底部 24px 内自动恢复 |
-| 思考行 发现 0 | 思考链块还没渲染（被折叠的过程组里不会出现在 DOM），等 `data-shimmer` 出现后会自动展开 |
-
-## v0.5 新增：动效、跟随修正、错误日志与按状态码重试
-
-### 动效（可关）
-
-| 场景 | 时长 / 曲线 |
-| --- | --- |
-| 新回合出现 | 260ms `cubic-bezier(.22,1,.36,1)`（easeOutQuint，快进慢停）淡入 + 上移 8px |
-| 切换会话 | 240ms `cubic-bezier(.16,1,.3,1)` 整块淡入 + 上移 6px |
-| 设置页出现 | 220ms `cubic-bezier(.22,1,.36,1)` 淡入 |
-| 开关/按钮微交互 | 120ms `cubic-bezier(.4,0,.2,1)` + `scale(.94)` |
-
-`prefers-reduced-motion: reduce` 时全部关闭；插件热更新后旧 `<style>` 会被覆盖，不会再出现「新 class 没样式」。
-
-### 跟随修正
-
-解除跟随现在必须同时满足：`scrollTop` 真的变小 **且** 刚有用户输入（滚轮/方向键/拖动滚动条），或单次跳动 > 160px。
-因此浏览器/React 的滚动锚定（内容变高时的自动补偿）不会再误判成「用户向上滚」而永久脱离跟随。
-
-### 错误日志与重试
-
-- 拦截 `llm/stream`，把 **400 / 401 / 402 / 403 / 429 / 502 / 503** 的状态码、错误码、provider/model、响应片段写进宿主日志；
-- 设置页「错误与重试」里可分别开关每个状态码的自动重试，并设置最大重试次数（0–10）；
-- 只在本轮**尚未输出任何内容**时重试，避免重复内容；429 优先使用 `Retry-After`，其余指数退避（0.8s 起，封顶 15s）；
-- 最近 20 条错误会显示在设置页，配置持久化到 `~/.dsh/perf-guard.retry.json`。
-
-## v0.6：完整动效、跟随自愈、无限重试、标签页中键关闭
-
-### 跟随自愈
-
-- 解除跟随只看**用户操作**：滚轮/方向键（700ms 窗口）或按住滚动条拖动；思维链展开、内容重排、浏览器滚动锚定造成的位移一律不算。
-- 贴底时如果 App 自己已脱离跟随（会渲染「回到底部」按钮），插件会点它一次，让 App 的 `followingTail` 状态机重新接管——这比硬写 `scrollTop` 可靠。
-- 自检面板新增「重挂跟随」计数。
-
-### 全局动效（不只是思考链）
-
-对话框 / 菜单 / 侧栏面板 / 标签 chip / 按钮 / 新回合 / 会话切换都带克制的过渡，曲线与时长见上表；
-`prefers-reduced-motion` 全关，「动效」开关一键关闭。
-
-### 界面质感（降低浏览器感）
-
-统一标签与面板圆角、收敛标签栏间距、细化滚动条、优化焦点环与滚动留白。开关：「动效 → 界面质感」。
-
-### 无限重试
-
-「错误与重试 → 最大重试次数」支持 **不限**（`maxRetries = -1`），上限从 10 放宽到 50。
-开启不限后遇到持续故障会一直重试，可随时关掉开关。
-
-### 标签页中键关闭
-
-在任意 dockkit 标签（浏览器、终端、文件预览等右侧面板）上按鼠标中键即可关闭，
-实现方式：`auxclick(button=1)` → 点击该标签的 `[data-dockkit-tab-close]`，同时阻止中键自动滚动。
-
-### 内核版本基线
-
-`package.json` 声明 `engines.dsh: ">=0.2.1-rc.4"`。DSH 在加载 profile 条目时会校验该字段，
-低于基线的内核会直接禁用本插件并打印原因（官方 `evaluatePluginCompatibility`），无法安装/挂载。
-
-## v0.7：截断/传输重试、设计素材、跟随仿真测试
-
-### 截断与传输中断也重试
-
-- 新增开关「**截断 / 传输中断重试**」（默认开）：
-  - 流被掐断、连接提前关闭、`TRANSPORT`/`STREAM_*` 等没有 HTTP 状态码的失败；
-  - **静默截断**：流结束却没有任何 `finish` chunk（代理掐断的典型形态）。
-- 这类失败即使在已经输出部分内容后也会整段重试（已显示的部分会丢弃重来），日志标记 `(partial output discarded)`；
-  用户主动取消（`ABORTED`/`CANCELLED`）永不重试。
-- 重试上限与状态码重试共用同一套设置（含「不限」）。
-
-### 设计素材（SVG → PNG）
-
-`tools/generate-assets.mjs` 用 Node + sharp 生成三张透明底素材：
-
-| 素材 | 用途 |
-| --- | --- |
-| `aurora.png` | 设置页 hero 与对话区顶部的极淡极光洗色 |
-| `sprig.png` | hero 右下角的鼠尾草绿植物线稿 |
-| `halo.png` | 备用光环装饰 |
-
-素材由宿主半通过 `GET /api/perf-guard/assets/<name>.png` 提供（只读、1 天缓存、不带自定义头也可取）。
-重新生成：`node tools/generate-assets.mjs`（需要 sharp，脚本会回退到 DSH 解包目录里的副本）。
-
-### 跟随仿真测试
-
-`test/follow-sim.mjs` 在假 DOM 上驱动真实的跟随控制器，覆盖 7 个场景：
-贴底追底、滚轮上滚后不追、布局锚定不脱离、回到底部恢复、阅读时不点「回到底部」、跟随中点一次且节流、按住滚动条立即停止。
-
-## v0.7.1：真实浏览器仿真 + 截断识别
-
-- `test/fixture/follow.html` 在 **真实 Chromium（Edge headless）** 里跑跟随行为，真滚动、真布局、真 WheelEvent：
-  `msedge --headless=new --dump-dom --virtual-time-budget=15000 file:///…/test/fixture/follow.html`，6 项全部 PASS。
-- 修掉两个真问题：
-  1. 回到贴底后 700ms 手势窗口还在，导致「滚回底部也不跟」——现在贴底即清空手势窗口；
-  2. 阅读模式下仍可能点「回到底部」——现在只在 follow 模式点，且 900ms 节流。
-- 截断识别：`finish.reason.stopReason` 命中 `length/max_tokens/max_output` 时，记一条
-  `output truncated (finish=…, N chars)` 并计入「截断/传输中断重试」；同时提示「重试通常无效，建议提高该模型 maxTokens」。
