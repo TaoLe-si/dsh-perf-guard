@@ -196,8 +196,22 @@ window.__ModuleLoader__.load({
       '}',
     ].join('\n')
 
+    const ATELIER_ID = 'dsh-perf-guard-atelier'
+
+    /** 视觉层单独放在 CSS 文件里，由宿主以 /assets/atelier.css 提供，改样式不用改 bundle。 */
+    function injectAtelier() {
+      if (typeof document === 'undefined') return
+      if (document.getElementById(ATELIER_ID) !== null) return
+      const link = document.createElement('link')
+      link.id = ATELIER_ID
+      link.rel = 'stylesheet'
+      link.href = API + '/assets/atelier.css'
+      ;(document.head ?? document.documentElement).appendChild(link)
+    }
+
     function injectStylesheet() {
       if (typeof document === 'undefined') return
+      injectAtelier()
       const existing = document.getElementById(STYLE_ID)
       if (existing !== null) {
         // 插件热更新后旧的 <style> 会留在页面上，必须覆盖：否则新类名没有样式，

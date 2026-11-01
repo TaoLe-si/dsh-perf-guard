@@ -20,7 +20,7 @@ import { zstdDecompressSync } from 'node:zlib'
 
 export const inject = ['webServer']
 
-const VERSION = '0.8.0'
+const VERSION = '0.9.0'
 const ROUTE_PREFIX = '/api/perf-guard'
 const SESSION_SCAN_TTL_MS = 60 * 1000
 const MONITOR_INTERVAL_MS = 30 * 1000
@@ -45,7 +45,12 @@ const DEFAULT_RETRY_PREFS = {
 }
 const MAX_ERRORS = 60
 /** UI 装饰素材：由 tools/generate-assets.mjs 生成的 PNG。 */
-const ASSET_FILES = new Set(['aurora.png', 'sprig.png', 'halo.png'])
+const ASSET_FILES = new Map([
+  ['aurora.png', 'image/png'],
+  ['sprig.png', 'image/png'],
+  ['halo.png', 'image/png'],
+  ['atelier.css', 'text/css; charset=utf-8'],
+])
 
 function assetPath(name) {
   return fileURLToPath(new URL('./assets/' + name, import.meta.url))
@@ -528,13 +533,13 @@ export function apply(ctx) {
     }
   }
 
-  const assetRoutes = [...ASSET_FILES].map((name) => ({
+  const assetRoutes = [...ASSET_FILES].map(([name, contentType]) => ({
     kind: 'exact',
     path: ROUTE_PREFIX + '/assets/' + name,
     handler: assetGuard(async (_req, res) => {
       const bytes = await readFile(assetPath(name))
       res.writeHead(200, {
-        'content-type': 'image/png',
+        'content-type': contentType,
         'content-length': bytes.length,
         'cache-control': 'public, max-age=86400',
       })

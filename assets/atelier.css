@@ -1,0 +1,95 @@
+/* DSH 高级感视觉层：奶油纸底 + 鼠尾草绿 + 发丝边 + 柔和投影
+ * 由 dsh-perf-guard 注入；随「界面质感」开关生效（html[data-perfguard-polish=on]）。
+ */
+html[data-perfguard-polish=on] {
+  --pg-paper: #FBFAF7;
+  --pg-paper-2: #F5F3EC;
+  --pg-ink: #2B2F2C;
+  --pg-ink-soft: #6B7370;
+  --pg-hairline: rgba(43, 47, 44, .1);
+  --pg-sage: #7C9B8B;
+  --pg-blush: #E9D3C6;
+  --pg-shadow: 0 1px 1px rgba(30, 38, 33, .03), 0 10px 30px -18px rgba(30, 38, 33, .28);
+}
+
+html[data-perfguard-polish=on][data-ds-dark-theme] {
+  --pg-paper: #141715;
+  --pg-paper-2: #1A1E1B;
+  --pg-ink: #E6E9E4;
+  --pg-ink-soft: #9AA39D;
+  --pg-hairline: rgba(230, 233, 228, .12);
+  --pg-shadow: 0 1px 1px rgba(0, 0, 0, .4), 0 14px 40px -22px rgba(0, 0, 0, .8);
+}
+
+/* 对话区：纸感底 + 两处极淡洗色 */
+html[data-perfguard-polish=on] [data-conversation-content] {
+  background:
+    radial-gradient(1100px 520px at 88% -12%, rgba(124, 155, 139, .13), transparent 62%),
+    radial-gradient(900px 520px at -8% 108%, rgba(233, 211, 198, .16), transparent 60%),
+    linear-gradient(var(--pg-paper), var(--pg-paper-2));
+  color: var(--pg-ink);
+  font-size: 14.5px;
+  line-height: 1.75;
+  letter-spacing: .006em;
+}
+
+/* 排版阶梯 */
+html[data-perfguard-polish=on] [data-conversation-content] h1 {
+  font-size: 21px; line-height: 1.35; letter-spacing: -.012em; font-weight: 620; margin: 1.6em 0 .6em;
+}
+html[data-perfguard-polish=on] [data-conversation-content] h2 {
+  font-size: 17.5px; line-height: 1.4; letter-spacing: -.008em; font-weight: 600; margin: 1.5em 0 .5em;
+}
+html[data-perfguard-polish=on] [data-conversation-content] h3 {
+  font-size: 15.5px; line-height: 1.45; font-weight: 600; margin: 1.3em 0 .45em;
+}
+html[data-perfguard-polish=on] [data-conversation-content] pre {
+  border-radius: 14px;
+  border: 1px solid var(--pg-hairline);
+  box-shadow: var(--pg-shadow);
+}
+html[data-perfguard-polish=on] [data-conversation-content] blockquote {
+  border-left: 2px solid var(--pg-sage);
+  padding-left: 14px;
+  color: var(--pg-ink-soft);
+}
+html[data-perfguard-polish=on] [data-conversation-content] ::selection {
+  background: rgba(124, 155, 139, .24);
+}
+
+/* 回合：列宽收窄居中，留呼吸 */
+html[data-perfguard-polish=on] [data-chat-turn] {
+  max-width: 860px;
+  margin-inline: auto;
+  padding: 10px 22px;
+  border-radius: 18px;
+}
+
+/* 输入区：大圆角 + 发丝边 + 柔和投影 */
+html[data-perfguard-polish=on] [data-composer-seat] > * {
+  border-radius: 22px !important;
+  border: 1px solid var(--pg-hairline) !important;
+  box-shadow: var(--pg-shadow) !important;
+}
+html[data-perfguard-polish=on] [data-composer-seat] > *:focus-within {
+  border-color: rgba(124, 155, 139, .5) !important;
+  box-shadow: 0 0 0 4px rgba(124, 155, 139, .12), var(--pg-shadow) !important;
+}
+
+/* 右侧面板与标签 */
+html[data-perfguard-polish=on] [data-dockkit-pane],
+html[data-perfguard-polish=on] [data-dockkit-float] {
+  border-radius: 16px;
+  border: 1px solid var(--pg-hairline);
+}
+html[data-perfguard-polish=on] [data-dockkit-tab] { border-radius: 11px; }
+
+/* 细滚动条 */
+html[data-perfguard-polish=on] ::-webkit-scrollbar { width: 9px; height: 9px; }
+html[data-perfguard-polish=on] ::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(43, 47, 44, .18);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+html[data-perfguard-polish=on] ::-webkit-scrollbar-thumb:hover { background: rgba(43, 47, 44, .3); background-clip: content-box; }
