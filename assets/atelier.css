@@ -93,3 +93,35 @@ html[data-perfguard-polish=on] ::-webkit-scrollbar-thumb {
   background-clip: content-box;
 }
 html[data-perfguard-polish=on] ::-webkit-scrollbar-thumb:hover { background: rgba(43, 47, 44, .3); background-clip: content-box; }
+/* ---- 侧栏：纸感底 + 发丝分隔，弱化"网页列表"感 ---- */
+html[data-perfguard-polish=on] [class*="sidebarCol"] {
+  background: linear-gradient(180deg, var(--pg-paper) 0%, var(--pg-paper-2) 100%);
+  border-right: 1px solid var(--pg-hairline);
+}
+html[data-perfguard-polish=on] [class*="newSession"] {
+  border-radius: 14px !important;
+  border: 1px solid var(--pg-hairline) !important;
+  background: color-mix(in srgb, var(--pg-paper) 70%, white 30%) !important;
+  box-shadow: 0 1px 1px rgba(30, 38, 33, .04), 0 8px 24px -18px rgba(30, 38, 33, .35);
+  transition: transform .14s cubic-bezier(.4,0,.2,1), box-shadow .18s cubic-bezier(.4,0,.2,1);
+}
+html[data-perfguard-polish=on] [class*="newSession"]:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 2px rgba(30, 38, 33, .05), 0 14px 32px -20px rgba(30, 38, 33, .45);
+}
+html[data-perfguard-polish=on] [class*="sessionRow"] {
+  border-radius: 10px;
+  transition: background-color .14s cubic-bezier(.4,0,.2,1);
+}
+html[data-perfguard-polish=on] [class*="sessionRow"]:hover { background: rgba(124, 155, 139, .07); }
+html[data-perfguard-polish=on] [class*="sessionRow"][class*="selected"] { background: rgba(124, 155, 139, .13); }
+
+/* ---- 顶栏与标签：去掉硬边，改用发丝线 + 柔和底 ---- */
+html[data-perfguard-polish=on] [data-slot] { border-bottom: 1px solid var(--pg-hairline); }
+html[data-perfguard-polish=on] [class*="_tab"] {
+  border-radius: 10px 10px 0 0;
+  transition: color .14s cubic-bezier(.4,0,.2,1), background-color .14s cubic-bezier(.4,0,.2,1);
+}
+html[data-perfguard-polish=on] [class*="_tab"][class*="tabActive"] {
+  box-shadow: inset 0 -2px 0 0 var(--pg-sage);
+}
