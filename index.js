@@ -1,41 +1,110 @@
 /**
  * dsh-perf-guard — 宿主半（Node / cordis 插件）。
  *
- * 只做"观测 + 诊断"，不碰会话数据：
- *  - 每 30s 采样宿主进程内存，超过阈值打 warn（提前发现 OOM 风险）；
- *  - 扫描 <DSH_HOME>/sessions 下的会话日志体积，找出真正撑爆内存的巨型会话；
- *  - 通过 /api/perf-guard/* 把上述数据交给浏览器半展示。
+ * 三块能力：
+ *  1. 观测：30s 采样宿主 RSS，扫描 <DSH_HOME>/sessions 找超大会话日志；
+ *  2. 错误日志：拦截 llm/stream，把 HTTP 400/401/402/403/429/502/503 的
+ *     状态码、error code、provider/model、响应片段、重试次数写进宿主日志，
+ *     同时保留环形缓冲供设置页展示；
+ *  3. 自动重试：按状态码分别开关 + 可选上限，只在「尚未吐出任何内容」时重试，
+ *     避免重复输出；429 优先使用 Retry-After。
  *
- * 刻意不做的事：不裁剪、不重写任何 session 日志。历史数据属于用户，
- * 需要瘦身时由用户自己决定（设置页只给出体积排行与建议）。
+ * 刻意不做的事：不裁剪、不重写任何 session 日志。
  */
+import { readFile, writeFile } from 'node:fs/promises'
 import { readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 export const inject = ['webServer']
 
-const VERSION = '0.4.0'
+const VERSION = '0.5.0'
 const ROUTE_PREFIX = '/api/perf-guard'
-/** 会话目录扫描结果缓存：目录很大时避免每次打开设置页都重新遍历。 */
 const SESSION_SCAN_TTL_MS = 60 * 1000
-/** 宿主内存采样间隔。 */
 const MONITOR_INTERVAL_MS = 30 * 1000
-/** 超过该 RSS 时打 warn，提示用户关注（不是硬限制）。 */
 const RSS_WARN_BYTES = 2 * 1024 ** 3
-/** 单次扫描最多收集的日志条数上限，防止异常目录把采样拖死。 */
 const MAX_LOGGED_FILES = 5000
+/** 用户可配置重试的状态码。 */
+const WATCHED_STATUSES = ['400', '401', '402', '403', '429', '502', '503']
+const DEFAULT_RETRY_PREFS = {
+  logErrors: true,
+  maxRetries: 2,
+  statuses: {
+    '400': false,
+    '401': false,
+    '402': false,
+    '403': false,
+    '429': true,
+    '502': true,
+    '503': true,
+  },
+}
+const MAX_ERRORS = 60
 
 function dshHome() {
   const fromEnv = process.env.DSH_HOME
   return fromEnv && fromEnv.trim().length > 0 ? fromEnv : join(homedir(), '.dsh')
 }
 
+function prefsPath() {
+  return join(dshHome(), 'perf-guard.retry.json')
+}
+
+let retryPrefs = null
+
+function normalizePrefs(raw) {
+  const prefs = {
+    logErrors: typeof raw?.logErrors === 'boolean' ? raw.logErrors : DEFAULT_RETRY_PREFS.logErrors,
+    maxRetries: Number.isInteger(raw?.maxRetries) ? Math.max(0, Math.min(10, raw.maxRetries)) : DEFAULT_RETRY_PREFS.maxRetries,
+    statuses: { ...DEFAULT_RETRY_PREFS.statuses },
+  }
+  for (const status of WATCHED_STATUSES) {
+    if (typeof raw?.statuses?.[status] === 'boolean') prefs.statuses[status] = raw.statuses[status]
+  }
+  return prefs
+}
+
+async function loadRetryPrefs(force = false) {
+  if (retryPrefs !== null && !force) return retryPrefs
+  try {
+    const raw = JSON.parse(await readFile(prefsPath(), 'utf8'))
+    retryPrefs = normalizePrefs(raw)
+  } catch {
+    retryPrefs = normalizePrefs(undefined)
+  }
+  return retryPrefs
+}
+
+async function saveRetryPrefs(input) {
+  const next = normalizePrefs(input)
+  retryPrefs = next
+  try {
+    await writeFile(prefsPath(), JSON.stringify(next, null, 2) + '\n', 'utf8')
+  } catch {
+    // 只读环境：内存里生效即可。
+  }
+  return next
+}
+
+/* ------------------------------------------------------------------ */
+/*  错误环缓冲                                                          */
+/* ------------------------------------------------------------------ */
+
+const recentErrors = []
+
+function recordError(entry) {
+  recentErrors.unshift(entry)
+  if (recentErrors.length > MAX_ERRORS) recentErrors.length = MAX_ERRORS
+}
+
+/* ------------------------------------------------------------------ */
+/*  会话日志统计（原有能力）                                             */
+/* ------------------------------------------------------------------ */
+
 function isSessionLog(name) {
   return name.endsWith('.jsonl') || name.endsWith('.jsonl.zstd')
 }
 
-/** 递归收集会话日志文件（session 目录层级固定，深度上限 3 已足够）。 */
 async function collectSessionLogs(dir, out, depth) {
   if (depth > 3 || out.length >= MAX_LOGGED_FILES) return
   let entries
@@ -61,7 +130,6 @@ async function collectSessionLogs(dir, out, depth) {
   }
 }
 
-/** 会话目录名即 sessionId，取父目录最后一段。 */
 function sessionIdOf(filePath) {
   const parts = filePath.split(/[\\/]/)
   return parts.length >= 2 ? parts[parts.length - 2] : filePath
@@ -101,6 +169,130 @@ function hostSnapshot() {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/*  错误分类 / 重试                                                     */
+/* ------------------------------------------------------------------ */
+
+function messageOf(failure, error) {
+  if (failure && typeof failure.message === 'string') return failure.message
+  if (error instanceof Error) return error.message
+  if (error !== undefined && error !== null) return String(error)
+  return ''
+}
+
+function statusOf(failure, error) {
+  if (failure && Number.isInteger(failure.status)) return failure.status
+  if (error && Number.isInteger(error.status)) return error.status
+  const message = messageOf(failure, error)
+  const leading = /^\s*(\d{3})\b/.exec(message)
+  if (leading !== null) return Number(leading[1])
+  const embedded = /"?status(?:Code)?"?\s*[:=]\s*(\d{3})/.exec(message)
+  if (embedded !== null) return Number(embedded[1])
+  return null
+}
+
+function describeFailure(failure, error, options, attempt) {
+  return {
+    at: new Date().toISOString(),
+    status: statusOf(failure, error),
+    code: (failure && failure.code) || (error && error.code) || null,
+    provider: options?.provider ?? null,
+    model: options?.model ?? null,
+    attempt,
+    retryAfterMs: failure && Number.isFinite(failure.providerRetryAfterMs) ? failure.providerRetryAfterMs : null,
+    message: messageOf(failure, error).slice(0, 600),
+  }
+}
+
+function backoffMs(info, attempt) {
+  if (info.retryAfterMs !== null && info.retryAfterMs > 0) return Math.min(info.retryAfterMs, 30_000)
+  const base = info.status === 429 ? 2000 : 800
+  return Math.min(base * 2 ** attempt, 15_000)
+}
+
+function sleep(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve()
+    const timer = setTimeout(resolve, ms)
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer)
+      resolve()
+    }, { once: true })
+  })
+}
+
+/**
+ * 包装一次 llm stream：记录错误并在允许时重试。
+ * 只有「还没有向调用方吐出任何 chunk」才重试，避免重复输出。
+ */
+async function* withRetryAndLogging(ctx, options, next) {
+  const prefs = await loadRetryPrefs()
+  for (let attempt = 0; ; attempt += 1) {
+    const attemptNumber = attempt + 1
+    let emitted = false
+    let pending = null
+    try {
+      const stream = await next()
+      for await (const chunk of stream) {
+        if (chunk !== null && typeof chunk === 'object' && chunk.type === 'finish' && chunk.reason?.kind === 'error') {
+          pending = { failure: chunk.reason.failure, chunk }
+          break
+        }
+        emitted = true
+        yield chunk
+      }
+    } catch (error) {
+      pending = { failure: undefined, error }
+    }
+
+    if (pending === null) return
+
+    const info = describeFailure(pending.failure, pending.error, options, attemptNumber)
+    recordError(info)
+    if (prefs.logErrors) {
+      const scope = [info.provider, info.model].filter(Boolean).join('/')
+      ctx.logger?.warn?.(
+        'perf-guard: LLM HTTP %s%s · %s · attempt %s · %s',
+        info.status ?? '?',
+        info.code ? ' ' + info.code : '',
+        scope || (options?.provider ?? '-'),
+        attemptNumber,
+        info.message,
+      )
+    }
+
+    const key = info.status === null ? null : String(info.status)
+    const retryable = key !== null
+      && prefs.statuses[key] === true
+      && !emitted
+      && attemptNumber <= prefs.maxRetries
+      && options?.signal?.aborted !== true
+
+    if (!retryable) {
+      if (pending.chunk !== undefined) {
+        yield pending.chunk
+        return
+      }
+      throw pending.error
+    }
+
+    const delay = backoffMs(info, attempt)
+    ctx.logger?.warn?.(
+      'perf-guard: retry %s/%s in %sms after HTTP %s',
+      attemptNumber,
+      prefs.maxRetries,
+      delay,
+      info.status,
+    )
+    await sleep(delay, options?.signal)
+    if (options?.signal?.aborted) return
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  HTTP 路由                                                          */
+/* ------------------------------------------------------------------ */
+
 function sendJson(res, status, body) {
   const payload = JSON.stringify(body)
   res.writeHead(status, {
@@ -110,15 +302,38 @@ function sendJson(res, status, body) {
   res.end(payload)
 }
 
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = []
+    let size = 0
+    req.on('data', (chunk) => {
+      size += chunk.length
+      if (size > 256 * 1024) {
+        reject(new Error('body too large'))
+        req.destroy()
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => {
+      try {
+        resolve(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString('utf8')))
+      } catch (error) {
+        reject(error)
+      }
+    })
+    req.on('error', reject)
+  })
+}
+
 export function apply(ctx) {
   const disposers = []
   const logger = ctx.logger
 
-  /** 只读路由仍要求自定义头，避免被跨站页面直接读取。 */
-  function guard(handler) {
+  function guard(methods, handler) {
     return async (req, res) => {
-      if (req.method !== 'GET') {
-        sendJson(res, 405, { ok: false, error: 'GET only' })
+      if (!methods.includes(req.method)) {
+        sendJson(res, 405, { ok: false, error: methods.join('/') + ' only' })
         return
       }
       if (req.headers['x-dsh-plugin'] !== 'perf-guard') {
@@ -137,20 +352,35 @@ export function apply(ctx) {
     {
       kind: 'exact',
       path: ROUTE_PREFIX + '/health',
-      handler: guard(async (_req, res) => {
+      handler: guard(['GET'], async (_req, res) => {
         sendJson(res, 200, { ok: true, version: VERSION })
       }),
     },
     {
       kind: 'exact',
       path: ROUTE_PREFIX + '/stats',
-      handler: guard(async (_req, res) => {
+      handler: guard(['GET'], async (_req, res) => {
         sendJson(res, 200, {
           ok: true,
           version: VERSION,
           host: hostSnapshot(),
           sessions: await collectSessionStats(),
+          retry: await loadRetryPrefs(),
+          errors: recentErrors.slice(0, 20),
         })
+      }),
+    },
+    {
+      kind: 'exact',
+      path: ROUTE_PREFIX + '/retry',
+      handler: guard(['GET', 'POST'], async (req, res) => {
+        if (req.method === 'GET') {
+          sendJson(res, 200, { ok: true, retry: await loadRetryPrefs(), statuses: WATCHED_STATUSES })
+          return
+        }
+        const body = await readBody(req)
+        const retry = await saveRetryPrefs(body)
+        sendJson(res, 200, { ok: true, retry })
       }),
     },
   ]
@@ -162,6 +392,13 @@ export function apply(ctx) {
   } catch (error) {
     logger?.warn?.('perf-guard: route registration failed: %s', error instanceof Error ? error.message : String(error))
   }
+
+  // 拦截 llm/stream：错误日志 + 自动重试（未吐出内容时才重试）。
+  ctx.inject(['llm'], (child) => {
+    const off = child.on('llm/stream', (options, next) => withRetryAndLogging(child, options, next))
+    child.effect(() => () => off())
+    logger?.info?.('perf-guard: llm/stream middleware attached')
+  })
 
   let warned = false
   const timer = setInterval(() => {
@@ -192,3 +429,7 @@ export function apply(ctx) {
 
   logger?.info?.('perf-guard: mounted v%s at %s', VERSION, ROUTE_PREFIX)
 }
+
+/** 仅供测试：错误分类、退避与偏好归一化。 */
+export const __internals = { statusOf, backoffMs, normalizePrefs }
+

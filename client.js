@@ -33,6 +33,7 @@ window.__ModuleLoader__.load({
       autoExpandThinking: true,
       smoothReveal: true,
       followTail: true,
+      motion: true,
     })
     /** DOM 节点 / JS 堆到达该阈值时自动降载。 */
     const HEAVY_DOM_NODES = 12000
@@ -87,6 +88,27 @@ window.__ModuleLoader__.load({
       '  max-height: 420px;',
       '  overflow: auto;',
       '}',
+      /* ---- 动效 ----
+       * 曲线：入场 cubic-bezier(.22,1,.36,1)=easeOutQuint（快进慢停，适合出现）；
+       *       场景切换 cubic-bezier(.16,1,.3,1)（更缓的收尾，避免闪）；
+       *       微交互 cubic-bezier(.4,0,.2,1)（Material 标准曲线）。
+       * 时长：列表项 240–260ms，场景 220–260ms，微交互 120ms；过长会显得迟钝。
+       */
+      '@keyframes dsh-pg-turn-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }',
+      '@keyframes dsh-pg-session-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }',
+      '@keyframes dsh-pg-fade-in { from { opacity: 0; } to { opacity: 1; } }',
+      '[data-perfguard-motion="on"] .dsh-pg { animation: dsh-pg-fade-in .22s cubic-bezier(.22,1,.36,1) both; }',
+      '[data-perfguard-motion="on"] .dsh-pg-enter { animation: dsh-pg-turn-in .26s cubic-bezier(.22,1,.36,1) both; }',
+      '[data-perfguard-motion="on"] [data-conversation-content].dsh-pg-session-enter { animation: dsh-pg-session-in .24s cubic-bezier(.16,1,.3,1) both; }',
+      '.dsh-pg-switch, .dsh-pg-btn { transition: transform .12s cubic-bezier(.4,0,.2,1), background-color .12s cubic-bezier(.4,0,.2,1); }',
+      '.dsh-pg-switch:active { transform: scale(.94); }',
+      '.dsh-pg-btn:active { transform: scale(.97); }',
+      '@media (prefers-reduced-motion: reduce) {',
+      '  [data-perfguard-motion="on"] .dsh-pg,',
+      '  [data-perfguard-motion="on"] .dsh-pg-enter,',
+      '  [data-perfguard-motion="on"] [data-conversation-content].dsh-pg-session-enter { animation: none; }',
+      '  .dsh-pg-switch, .dsh-pg-btn { transition: none; }',
+      '}',
       /* 设置页样式（全部走主题变量，深浅色自动跟随）。 */
       '.dsh-pg { display: flex; flex-direction: column; gap: 22px; max-width: 820px; padding: 10px 4px 40px; }',
       '.dsh-pg-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }',
@@ -111,6 +133,11 @@ window.__ModuleLoader__.load({
       '.dsh-pg-card strong { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }',
       '.dsh-pg-list { margin: 0; padding: 0 0 0 16px; font-size: 12px; line-height: 1.8; opacity: .75; }',
       '.dsh-pg-actions { display: flex; gap: 8px; }',
+      '.dsh-pg-input { width: 72px; font-size: 13px; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--dsh-border, rgba(127,127,127,.3)); background: transparent; color: inherit; text-align: center; }',
+      '.dsh-pg-errors { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }',
+      '.dsh-pg-error { display: flex; gap: 10px; align-items: baseline; padding: 6px 10px; border-radius: 8px; background: var(--dsh-fill-1, rgba(127,127,127,.05)); }',
+      '.dsh-pg-error b { font-variant-numeric: tabular-nums; }',
+      '.dsh-pg-error span { opacity: .62; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
       '.dsh-pg-btn { font-size: 12px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--dsh-border, rgba(127,127,127,.3)); background: transparent; cursor: pointer; }',
       '.dsh-pg-btn:hover { background: var(--dsh-fill-1, rgba(127,127,127,.12)); }',
       /* 思考链展开时的入场动画：淡入 + 轻微上移，避免内容突然撑开。 */
@@ -164,6 +191,7 @@ window.__ModuleLoader__.load({
       root.dataset.perfguardTurns = prefs.aggressiveTurns ? 'on' : 'off'
       root.dataset.perfguardClamp = prefs.clampTools ? 'on' : 'off'
       root.dataset.perfguardReveal = prefs.smoothReveal ? 'on' : 'off'
+      root.dataset.perfguardMotion = prefs.motion ? 'on' : 'off'
     }
 
     /** 滚动期间给 <html> 打标，滚完 140ms 摘掉。 */
@@ -368,8 +396,14 @@ window.__ModuleLoader__.load({
       let pinned = true
       let frame = 0
       let active = null
+      let intentUntil = 0
       const observed = new WeakSet()
       const positions = new WeakMap()
+
+      /** 只有「用户明确的向上操作」才允许解除跟随；页面自锚定造成的位移不算。 */
+      function markIntent() {
+        intentUntil = Date.now() + 700
+      }
 
       /** 页面上可能同时存在多个 [data-conversation-scroll]（主对话 + 侧栏预览），取最大的可见那个。 */
       function pickScroller() {
@@ -424,14 +458,18 @@ window.__ModuleLoader__.load({
         const gap = bottomGap(element)
         const previous = positions.get(element)
         const movedUp = previous !== undefined && element.scrollTop < previous.top - 2
+        const jump = previous !== undefined ? Math.abs(element.scrollTop - previous.top) : 0
         positions.set(element, { top: element.scrollTop, height: element.scrollHeight })
+        runtime.gap = Math.round(gap)
+        runtime.scrollTop = Math.round(element.scrollTop)
         if (gap <= 24) {
           pinned = true
           runtime.pinned = true
           return
         }
-        // 只有「位置真的往上走」才脱离；内容变高导致的 gap 变大不算。
-        if (movedUp) {
+        // 解除条件：位置真的往上走，且要么刚有用户输入（滚轮/按键/拖动），
+        // 要么是一步大跳（拖动滚动条）。页面自锚定的小幅回退不再解除跟随。
+        if (movedUp && (Date.now() < intentUntil || jump > 160)) {
           pinned = false
           runtime.pinned = false
         }
@@ -443,15 +481,23 @@ window.__ModuleLoader__.load({
         // 过程体 / 工具输出里的嵌套滚动不算「离开底部」。
         if (target.closest('[data-step-process-body]') !== null) return
         const element = target.closest(SCROLL_SELECTOR)
-        if (element === null || event.deltaY >= 0) return
+        if (element === null) return
+        markIntent()
+        if (event.deltaY >= 0) return
         if (bottomGap(element) > 64) {
           pinned = false
           runtime.pinned = false
         }
       }
 
+      const onPointerDown = (event) => {
+        const target = event.target
+        if (target instanceof Element && target.closest(SCROLL_SELECTOR) !== null) markIntent()
+      }
+
       const onKeyDown = (event) => {
         if (event.key !== 'PageUp' && event.key !== 'ArrowUp' && event.key !== 'Home') return
+        markIntent()
         const element = pickScroller()
         if (element !== null && bottomGap(element) > 64) {
           pinned = false
@@ -469,6 +515,7 @@ window.__ModuleLoader__.load({
 
       document.addEventListener('scroll', onScroll, { capture: true, passive: true })
       document.addEventListener('wheel', onWheel, { capture: true, passive: true })
+      document.addEventListener('pointerdown', onPointerDown, { capture: true, passive: true })
       document.addEventListener('keydown', onKeyDown, { capture: true })
 
       return () => {
@@ -477,9 +524,64 @@ window.__ModuleLoader__.load({
         window.cancelAnimationFrame(frame)
         document.removeEventListener('scroll', onScroll, { capture: true })
         document.removeEventListener('wheel', onWheel, { capture: true })
+        document.removeEventListener('pointerdown', onPointerDown, { capture: true })
         document.removeEventListener('keydown', onKeyDown, { capture: true })
       }
     }
+    /** 新回合淡入 + 会话切换整体过渡：只加 class，动画结束即摘除，不改布局。 */
+    function installMotion(isEnabled) {
+      const seen = new WeakSet()
+      let sessionTimer = 0
+
+      function play(element) {
+        if (seen.has(element)) return
+        seen.add(element)
+        element.classList.add('dsh-pg-enter')
+        const clear = () => {
+          element.classList.remove('dsh-pg-enter')
+          element.removeEventListener('animationend', clear)
+        }
+        element.addEventListener('animationend', clear)
+        window.setTimeout(clear, 420)
+      }
+
+      function walk(root) {
+        if (!(root instanceof Element)) return
+        if (root.matches('[data-chat-turn]')) play(root)
+        for (const turn of root.querySelectorAll('[data-chat-turn]')) play(turn)
+      }
+
+      const observer = new MutationObserver((records) => {
+        for (const record of records) {
+          if (record.type === 'attributes') {
+            if (!isEnabled()) continue
+            const target = record.target
+            if (!(target instanceof Element)) continue
+            const content = target.closest('[data-conversation-content]') ?? target
+            content.classList.remove('dsh-pg-session-enter')
+            void content.offsetWidth
+            content.classList.add('dsh-pg-session-enter')
+            if (sessionTimer) window.clearTimeout(sessionTimer)
+            sessionTimer = window.setTimeout(() => content.classList.remove('dsh-pg-session-enter'), 320)
+            continue
+          }
+          if (!isEnabled()) continue
+          for (const node of record.addedNodes) walk(node)
+        }
+      })
+      observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['data-conversation-session'],
+      })
+
+      return () => {
+        observer.disconnect()
+        if (sessionTimer) window.clearTimeout(sessionTimer)
+      }
+    }
+
     function Switch(props) {
       return h('button', {
         type: 'button',
@@ -538,6 +640,13 @@ window.__ModuleLoader__.load({
           ],
         },
         {
+          title: '动效',
+          hint: '新回合淡入上移 260ms、会话切换 240ms；曲线 easeOutQuint，系统「减少动态效果」时自动关闭。',
+          rows: [
+            ['motion', '界面切换动画', '新回合出现与会话切换时做一次淡入位移；只挂 class，不改布局、不再重复播放。'],
+          ],
+        },
+        {
           title: '滚动与渲染',
           hint: '控制浏览器为长会话付出多少布局与绘制成本。',
           rows: [
@@ -552,6 +661,17 @@ window.__ModuleLoader__.load({
 
       const host = stats && stats.host
       const sessions = host && host.sessions
+      const retry = host && host.retry ? host.retry : null
+      const errors = host && host.errors ? host.errors : []
+
+      const saveRetry = (next) => {
+        setStats((current) => (current && current.host ? { ...current, host: { ...current.host, retry: next } } : current))
+        fetch(API + '/retry', {
+          method: 'POST',
+          headers: { 'x-dsh-plugin': 'perf-guard', 'content-type': 'application/json' },
+          body: JSON.stringify(next),
+        }).catch(() => {})
+      }
 
       return h(
         'div',
@@ -590,6 +710,62 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dsh-pg-card' }, h('em', null, 'DOM 节点'), h('strong', null, stats ? String(stats.nodes) : '-')),
           h('div', { className: 'dsh-pg-card' }, h('em', null, '宿主进程 RSS'), h('strong', null, host ? formatMb(host.host.rss) : '未连接')),
           h('div', { className: 'dsh-pg-card' }, h('em', null, '会话日志总量'), h('strong', null, sessions ? formatMb(sessions.totalBytes) : '未扫描')),
+        ),
+        h(
+          'section',
+          { className: 'dsh-pg-group' },
+          h('div', { className: 'dsh-pg-group-title' }, '错误与重试'),
+          h('div', { className: 'dsh-pg-group-hint' }, 'HTTP 400/401/402/403/429/502/503 会带状态码、provider/model、响应片段写入宿主日志；按状态码分别开关自动重试，只在本轮尚未输出内容时重试。'),
+          retry === null
+            ? h('div', { className: 'dsh-pg-desc' }, '宿主半未连接，暂不可配置。')
+            : [
+                h(
+                  'div',
+                  { className: 'dsh-pg-row', key: 'log' },
+                  h('div', { className: 'dsh-pg-row-main' }, h('b', null, '详细错误日志'), h('span', null, '把状态码、错误码、模型与响应片段写进 desktop-next.log，并在下方保留最近 20 条。')),
+                  h(Switch, { on: retry.logErrors === true, onToggle: () => saveRetry({ ...retry, logErrors: retry.logErrors !== true }) }),
+                ),
+                h(
+                  'div',
+                  { className: 'dsh-pg-row', key: 'max' },
+                  h('div', { className: 'dsh-pg-row-main' }, h('b', null, '最大重试次数'), h('span', null, '每个请求的上限，0 表示不自动重试；指数退避 0.8s 起，429 优先用 Retry-After。')),
+                  h('input', {
+                    className: 'dsh-pg-input',
+                    type: 'number',
+                    min: 0,
+                    max: 10,
+                    value: retry.maxRetries,
+                    onChange: (event) => {
+                      const parsed = Number(event.target.value)
+                      const value = Number.isFinite(parsed) ? Math.max(0, Math.min(10, Math.round(parsed))) : 0
+                      saveRetry({ ...retry, maxRetries: value })
+                    },
+                  }),
+                ),
+                ...Object.entries({ '400': '参数错误', '401': '鉴权失败', '402': '余额不足', '403': '无权限', '429': '限流', '502': '网关错误', '503': '服务不可用' }).map(([status, label]) =>
+                  h(
+                    'div',
+                    { className: 'dsh-pg-row', key: 'status-' + status },
+                    h('div', { className: 'dsh-pg-row-main' }, h('b', null, 'HTTP ' + status + ' · ' + label), h('span', null, retry.statuses[status] ? '失败后自动重试（未输出内容时）' : '只记录日志，不自动重试')),
+                    h(Switch, {
+                      on: retry.statuses[status] === true,
+                      onToggle: () => saveRetry({ ...retry, statuses: { ...retry.statuses, [status]: retry.statuses[status] !== true } }),
+                    }),
+                  ),
+                ),
+                errors.length > 0
+                  ? h(
+                      'div',
+                      { className: 'dsh-pg-errors', key: 'errors' },
+                      ...errors.slice(0, 8).map((item, index) =>
+                        h('div', { className: 'dsh-pg-error', key: String(index) },
+                          h('b', null, String(item.status ?? '?')),
+                          h('span', null, (item.provider ?? '-') + ' · ' + (item.code ?? '-') + ' · ' + item.message),
+                        ),
+                      ),
+                    )
+                  : null,
+              ],
         ),
         h(
           'section',
@@ -643,6 +819,7 @@ window.__ModuleLoader__.load({
       ctx.effect(() => installAutoDegrade(() => readPrefs().autoDegrade))
       ctx.effect(() => installAutoExpandThinking(() => readPrefs().autoExpandThinking))
       ctx.effect(() => installFollowTail(() => readPrefs().followTail))
+      ctx.effect(() => installMotion(() => readPrefs().motion))
 
       ctx.slots.inject('settings.section', () =>
         ctx.slots.register(
