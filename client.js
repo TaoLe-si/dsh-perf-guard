@@ -34,7 +34,6 @@ window.__ModuleLoader__.load({
       smoothReveal: true,
       followTail: true,
       motion: true,
-      polish: true,
     })
     /** DOM 节点 / JS 堆到达该阈值时自动降载。 */
     const HEAVY_DOM_NODES = 12000
@@ -122,25 +121,12 @@ window.__ModuleLoader__.load({
       '[data-perfguard-motion="on"] button, [data-perfguard-motion="on"] [role="button"] { transition: background-color .12s cubic-bezier(.4,0,.2,1), color .12s cubic-bezier(.4,0,.2,1), border-color .12s cubic-bezier(.4,0,.2,1), opacity .12s; }',
       '[data-perfguard-motion="on"] [data-chat-turn] { animation: dsh-pg-turn-in .26s cubic-bezier(.22,1,.36,1) both; }',
       /* ---- 界面质感：统一的圆角 / 留白 / 层次，降低「浏览器默认控件」感 ---- */
-      '[data-perfguard-polish="on"] [data-dockkit-tab] { border-radius: 10px; }',
-      '[data-perfguard-polish="on"] [data-dockkit-strip] { gap: 4px; padding-inline: 6px; }',
-      '[data-perfguard-polish="on"] [data-dockkit-pane], [data-perfguard-polish="on"] [data-dockkit-float] { border-radius: 14px; overflow: hidden; }',
-      '[data-perfguard-polish="on"] [data-conversation-content] { scroll-padding-block: 12px; }',
-      '[data-perfguard-polish="on"] [data-chat-turn] { scroll-margin-block: 14px; }',
-      '[data-perfguard-polish="on"] button:focus-visible, [data-perfguard-polish="on"] [role="button"]:focus-visible { outline-offset: 2px; border-radius: 8px; }',
-      '[data-perfguard-polish="on"] ::-webkit-scrollbar { width: 10px; height: 10px; }',
-      '[data-perfguard-polish="on"] ::-webkit-scrollbar-thumb { border-radius: 999px; background: var(--dsh-scrollbar-thumb, rgba(127,127,127,.28)); border: 3px solid transparent; background-clip: content-box; }',
-      '[data-perfguard-polish="on"] ::-webkit-scrollbar-thumb:hover { background: var(--dsh-scrollbar-thumb-hover, rgba(127,127,127,.45)); background-clip: content-box; }',
-      '[data-perfguard-polish="on"] ::-webkit-scrollbar-track { background: transparent; }',
       '@media (prefers-reduced-motion: reduce) {',
       '  [data-perfguard-motion="on"] [role="dialog"], [data-perfguard-motion="on"] [role="menu"],',
       '  [data-perfguard-motion="on"] [data-dockkit-pane], [data-perfguard-motion="on"] [data-chat-turn] { animation: none; }',
       '  [data-perfguard-motion="on"] button, [data-perfguard-motion="on"] [role="button"] { transition: none; }',
       '}',
       /* 对话区顶部一层极淡的极光洗色，让大面积留白不像空白表格。 */
-      '[data-perfguard-polish="on"] [data-conversation-content] { position: relative; }',
-      '[data-perfguard-polish="on"] [data-conversation-content]::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 360px; background: url("/api/perf-guard/assets/aurora.png") center top / 1280px auto no-repeat; opacity: .16; pointer-events: none; }',
-      '[data-ds-dark-theme] [data-perfguard-polish="on"] [data-conversation-content]::before { opacity: .09; }',
       /* 设置页样式（全部走主题变量，深浅色自动跟随）。 */
       '.dsh-pg { display: flex; flex-direction: column; gap: 22px; max-width: 820px; padding: 10px 4px 40px; }',
       /* 柔和高级感：hero 用生成的极光底图 + 植物线稿，卡片用大圆角与极淡投影。 */
@@ -197,22 +183,8 @@ window.__ModuleLoader__.load({
       '}',
     ].join('\n')
 
-    const ATELIER_ID = 'dsh-perf-guard-atelier'
-
-    /** 视觉层单独放在 CSS 文件里，由宿主以 /assets/atelier.css 提供，改样式不用改 bundle。 */
-    function injectAtelier() {
-      if (typeof document === 'undefined') return
-      if (document.getElementById(ATELIER_ID) !== null) return
-      const link = document.createElement('link')
-      link.id = ATELIER_ID
-      link.rel = 'stylesheet'
-      link.href = API + '/assets/atelier.css'
-      ;(document.head ?? document.documentElement).appendChild(link)
-    }
-
     function injectStylesheet() {
       if (typeof document === 'undefined') return
-      injectAtelier()
       const existing = document.getElementById(STYLE_ID)
       if (existing !== null) {
         // 插件热更新后旧的 <style> 会留在页面上，必须覆盖：否则新类名没有样式，
@@ -253,7 +225,6 @@ window.__ModuleLoader__.load({
       root.dataset.perfguardClamp = prefs.clampTools ? 'on' : 'off'
       root.dataset.perfguardReveal = prefs.smoothReveal ? 'on' : 'off'
       root.dataset.perfguardMotion = prefs.motion ? 'on' : 'off'
-      root.dataset.perfguardPolish = prefs.polish ? 'on' : 'off'
     }
 
     /** 滚动期间给 <html> 打标，滚完 140ms 摘掉。 */
@@ -886,9 +857,7 @@ window.__ModuleLoader__.load({
           title: '动效',
           hint: '新回合淡入上移 260ms、会话切换 240ms；曲线 easeOutQuint，系统「减少动态效果」时自动关闭。',
           rows: [
-            ['motion', '界面动画', '新回合、会话切换、对话框、菜单、面板、按钮都做一次克制的过渡；动画只挂 class，不改布局，不再重复播放。'],
-            ['polish', '界面质感', '统一圆角与间距、细化滚动条、优化焦点环，降低浏览器默认控件感。'],
-          ],
+            ['motion', '界面动画', '新回合、会话切换、对话框、菜单、面板、按钮都做一次克制的过渡；动画只挂 class，不改布局，不再重复播放。'],          ],
         },
         {
           title: '滚动与渲染',
