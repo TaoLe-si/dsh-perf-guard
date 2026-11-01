@@ -27,6 +27,7 @@ DSH（DeepSeek Harness）的长会话体验插件：**贴底跟随、思考链�
 | HTTP 400 / 401 / 402 / 403 | `LlmError.status` 或消息前缀 | 只记日志 |
 | HTTP 429 / 502 / 503 | 同上 | 重试 |
 | `TRANSPORT` / `STREAM_*` / `TIMEOUT` / `ETIMEDOUT` | 错误码或消息（含 `Request timed out.`、`stream idle timeout`） | 重试 |
+| 上游空转 | 强信号「没有产出 / 空响应 / no output / empty completion」；弱信号「稍后重试」须同时出现 上游/网关/中转/超时 语境 | 重试 |
 | 静默截断 | 流结束但没有 `finish` chunk | 重试 |
 | 长度截断 | `finish.reason.stopReason` 命中 `length/max_tokens/max_output` | 重试并记录 |
 
@@ -34,6 +35,10 @@ DSH（DeepSeek Harness）的长会话体验插件：**贴底跟随、思考链�
 - HTTP 状态类只在**本轮尚未输出内容**时重试；传输/截断允许整段重试，日志标 `(partial output discarded)`。
 - `ABORTED` / `CANCELLED`（用户取消）永不重试；429 优先 `Retry-After`，其余指数退避（0.8s 起，封顶 15s）。
 - ⚠️ 长度截断重试通常仍会截断，根治是把该模型的 `maxTokens` 调大。
+- 上游空转（如中转回 `上游 95 秒内没有产出，请稍后重试`）整轮零内容落地，重试不会产生重复输出；
+  它受「截断 / 传输中断重试」开关控制。判定分两级，避免把 `余额不足，请稍后重试` 这类欠费错误也拉进重试：
+  「没产出 / 空响应」本身即充分，「稍后重试」只有在同一句里出现上游/网关/超时语境时才成立。
+  ⚠️ 若同时开了「不限」重试，而上游持续不产出，会持续重试下去（退避封顶 15s）。
 
 ### 4. 待办常驻面板（默认开）
 

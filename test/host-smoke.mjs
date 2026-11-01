@@ -96,6 +96,24 @@ test('isTransportFailure：识别传输/截断，排除用户取消', () => {
   assert.equal(isTransportFailure(undefined, new Error('connect ETIMEDOUT 1.2.3.4:443')), true)
 })
 
+test('isTransportFailure：上游「没有产出，请稍后重试」也归入可重试', () => {
+  // 中转让上游空转 95 秒后自己掐断时回的就是这条；它没有状态码也不含 TRANSPORT 关键词。
+  assert.equal(isTransportFailure({ code: 'PI_AI_ERROR', message: '上游 95 秒内没有产出，请稍后重试' }), true)
+  assert.equal(isTransportFailure(undefined, new Error('上游 95 秒内没有产出，请稍后重试')), true)
+  assert.equal(isTransportFailure({ code: 'PI_AI_ERROR', message: 'no output produced upstream' }), true)
+  assert.equal(isTransportFailure(undefined, new Error('empty completion')), true)
+  // 单独的 "please retry later" 是弱信号，没有上游/超时语境时不算空转（见下方收窄用例）。
+  // 用户取消优先于任何文案。
+  assert.equal(isTransportFailure({ code: 'ABORTED', message: '上游 95 秒内没有产出，请稍后重试' }), false)
+  // 普通鉴权/参数类错误不能被误判成空转。
+  assert.equal(isTransportFailure({ code: 'AUTH', message: '401 unauthorized' }), false)
+  assert.equal(isTransportFailure(undefined, new Error('invalid_parameter_error: developer role unsupported')), false)
+  // 弱信号「稍后重试」必须带上游/超时语境：欠费不该无限重试。
+  assert.equal(isTransportFailure(undefined, new Error('余额不足，请稍后重试')), false)
+  assert.equal(isTransportFailure(undefined, new Error('上游繁忙，请稍后重试')), true)
+  assert.equal(isTransportFailure(undefined, new Error('gateway timeout, please retry later')), true)
+})
+
 test('传输中断：即使已输出内容也整段重试', async () => {
   const chunks = []
   const fakeCtx = { logger: { warn() {} } }
@@ -120,6 +138,35 @@ test('传输中断：即使已输出内容也整段重试', async () => {
   }
   assert.equal(call, 2)
   assert.deepEqual(chunks.filter((c) => c.type === 'finish'), [stop])
+})
+
+test('上游「没有产出，请稍后重试」：零内容落地，整段重试', async () => {
+  const chunks = []
+  const warnings = []
+  const fakeCtx = { logger: { warn: (...args) => warnings.push(args) } }
+  const text = { type: 'text-delta', delta: 'recovered' }
+  const stop = { type: 'finish', reason: { kind: 'stop' } }
+  let call = 0
+  const next = async () => {
+    call += 1
+    if (call === 1) {
+      // 这一轮一个 chunk 都没吐出来就被中转掐断。
+      return (async function* () {
+        throw Object.assign(new Error('上游 95 秒内没有产出，请稍后重试'), { code: 'PI_AI_ERROR' })
+      })()
+    }
+    return (async function* () {
+      yield text
+      yield stop
+    })()
+  }
+  for await (const chunk of withRetryAndLogging(fakeCtx, { provider: 'p', model: 'm' }, next)) {
+    chunks.push(chunk)
+  }
+  assert.equal(call, 2)
+  assert.deepEqual(chunks, [text, stop])
+  // logger 用 %s 占位符：格式串在 args[0]，次数在 args[1]。
+  assert.ok(warnings.some((args) => String(args[0]).includes('perf-guard: retry') && args[1] === 1))
 })
 
 test('静默截断（没有 finish chunk）也会重试', async () => {

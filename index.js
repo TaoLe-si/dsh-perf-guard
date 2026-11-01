@@ -20,7 +20,7 @@ import { zstdDecompressSync } from 'node:zlib'
 
 export const inject = ['webServer']
 
-const VERSION = '1.0.2'
+const VERSION = '1.0.3'
 const ROUTE_PREFIX = '/api/perf-guard'
 const SESSION_SCAN_TTL_MS = 60 * 1000
 const MONITOR_INTERVAL_MS = 30 * 1000
@@ -210,12 +210,45 @@ function statusOf(failure, error) {
 
 const TRANSPORT_PATTERN = /TRANSPORT|STREAM|TRUNCATED|TIMEOUT|ETIMEDOUT|timed out|request timeout|terminated|Connection error|stream ended|socket hang up|ECONNRESET|other side closed|premature close|unexpected end/i
 
-/** 无 HTTP 状态码的传输层/截断类失败。 */
+/**
+ * 上游「这一轮什么都没产出」的失败（强信号）。
+ *
+ * 中转/网关在上游长时间不吐 token 时会自己掐断并回一条中文错误，例如
+ * `上游 95 秒内没有产出，请稍后重试`。它既没有 HTTP 状态码，也不含
+ * TRANSPORT_PATTERN 里的任何一个词，所以过去落在 `unknown` 类而不重试
+ * —— 但这恰好是最该重试的一种：整轮零内容落地，重试不可能产生重复输出。
+ */
+const NO_OUTPUT_PATTERN = /没有产出|未产出|无输出|没输出|空响应|no output|produced no (?:output|content|response|text)|empty (?:response|completion|reply)/i
+
+/** 「稍后重试」这种弱信号，只有配合上游/超时语境才足以判定为空转。 */
+const RETRY_LATER_PATTERN = /稍后重试|稍后再试|(?:please )?(?:retry|try) (?:again )?later/i
+
+/** 弱信号的语境条件：不能说"任何带请稍后重试的错误都重试"。 */
+const UPSTREAM_CONTEXT_PATTERN = /上游|网关|中转|超时|upstream|gateway|proxy|timeout|timed out|timed-out/i
+
+/**
+ * 判定一次失败是否属于「上游空转」。
+ *
+ * 分两级，避免把 `余额不足，请稍后重试` 这类**不该重试**的失败也拉进来：
+ * - 强信号「没产出 / 空响应」：本身即充分；
+ * - 弱信号「稍后重试」：必须同时出现上游/超时语境。
+ *
+ * 刻意**不**认 `PI_AI_ERROR` 这种泛化 code——那会把这层变成
+ * 「任何 pi-ai 错误都重试」，在 `maxRetries = -1` 下足以打成死循环。
+ */
+function isUpstreamStall(text) {
+  if (typeof text !== 'string' || text.length === 0) return false
+  if (NO_OUTPUT_PATTERN.test(text)) return true
+  return RETRY_LATER_PATTERN.test(text) && UPSTREAM_CONTEXT_PATTERN.test(text)
+}
+
+/** 无 HTTP 状态码的传输层/截断/上游空转类失败。 */
 function isTransportFailure(failure, error, message) {
   const code = String((failure && failure.code) || (error && error.code) || '')
   if (code === 'ABORTED' || code === 'CANCELLED') return false
-  if (TRANSPORT_PATTERN.test(code)) return true
-  return TRANSPORT_PATTERN.test(message || messageOf(failure, error))
+  if (TRANSPORT_PATTERN.test(code) || isUpstreamStall(code)) return true
+  const text = message || messageOf(failure, error)
+  return TRANSPORT_PATTERN.test(text) || isUpstreamStall(text)
 }
 
 function describeFailure(failure, error, options, attempt) {
