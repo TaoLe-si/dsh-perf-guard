@@ -125,3 +125,96 @@ html[data-perfguard-polish=on] [class*="_tab"] {
 html[data-perfguard-polish=on] [class*="_tab"][class*="tabActive"] {
   box-shadow: inset 0 -2px 0 0 var(--pg-sage);
 }
+/* ---- 第二轮真机迭代：侧栏 / 标签 / 卡片 / 输入区 ---- */
+html[data-perfguard-polish=on] {
+  --pg-paper: #FBFAF7;
+  --pg-paper-2: #F4F1E9;
+  --pg-ink: #2A2E2B;
+  --pg-ink-soft: #6C746F;
+  --pg-hairline: rgba(42, 46, 43, .1);
+  --pg-sage: #7C9B8B;
+  --pg-blush: #E7D3C6;
+  --pg-shadow: 0 1px 1px rgba(30, 38, 33, .03), 0 12px 32px -20px rgba(30, 38, 33, .3);
+}
+
+html[data-perfguard-polish=on] [class*="sidebarCol"] {
+  background: linear-gradient(180deg, #FBFAF7, #F1EEE6);
+  border-right: 1px solid var(--pg-hairline);
+  padding: 14px 12px;
+}
+html[data-perfguard-polish=on] [class*="newSession"] {
+  border-radius: 16px !important;
+  border: 1px solid var(--pg-hairline) !important;
+  background: linear-gradient(135deg, rgba(124, 155, 139, .14), rgba(231, 211, 198, .16)) !important;
+  box-shadow: 0 1px 1px rgba(30, 38, 33, .04), 0 10px 26px -18px rgba(30, 38, 33, .4);
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+html[data-perfguard-polish=on] [class*="sessionRow"] {
+  border-radius: 12px;
+  padding: 7px 10px;
+  transition: background-color .16s cubic-bezier(.4, 0, .2, 1), box-shadow .16s;
+}
+html[data-perfguard-polish=on] [class*="sessionRow"]:hover { background: rgba(124, 155, 139, .07); }
+html[data-perfguard-polish=on] [class*="sessionRow"][class*="selected"] {
+  background: rgba(124, 155, 139, .13);
+  box-shadow: inset 2px 0 0 0 var(--pg-sage);
+}
+
+html[data-perfguard-polish=on] [data-slot] {
+  border-bottom: 1px solid var(--pg-hairline);
+  background: linear-gradient(180deg, rgba(251, 250, 247, .9), rgba(251, 250, 247, .72));
+  backdrop-filter: blur(10px);
+}
+html[data-perfguard-polish=on] [class*="_tab"] {
+  border-radius: 999px;
+  padding: 5px 14px;
+  margin-right: 4px;
+  border: 1px solid transparent;
+  color: var(--pg-ink-soft);
+}
+html[data-perfguard-polish=on] [class*="_tab"][class*="tabActive"] {
+  background: var(--pg-paper);
+  border-color: var(--pg-hairline);
+  color: var(--pg-ink);
+  box-shadow: 0 1px 1px rgba(30, 38, 33, .05), 0 6px 16px -12px rgba(30, 38, 33, .35);
+}
+
+/* 思考块：从纯白塑料感改为鼠尾草淡染卡片 */
+html[data-perfguard-polish=on] [data-variant="think"] {
+  background: rgba(124, 155, 139, .055);
+  border: 1px solid var(--pg-hairline);
+  border-radius: 14px;
+  padding: 10px 14px;
+}
+html[data-perfguard-polish=on] [data-step-process] { border-radius: 14px; }
+html[data-perfguard-polish=on] [data-chat-turn] [class*="command"],
+html[data-perfguard-polish=on] [data-chat-turn] [class*="Command"],
+html[data-perfguard-polish=on] [data-chat-turn] [class*="card"],
+html[data-perfguard-polish=on] [data-chat-turn] [class*="Card"] {
+  border-radius: 16px !important;
+  border: 1px solid var(--pg-hairline) !important;
+  box-shadow: var(--pg-shadow) !important;
+}
+
+html[data-perfguard-polish=on] [data-conversation-content] pre {
+  background: rgba(42, 46, 43, .04) !important;
+  border: 1px solid var(--pg-hairline) !important;
+  box-shadow: none !important;
+  border-radius: 16px !important;
+}
+html[data-perfguard-polish=on] [data-conversation-content] code {
+  background: rgba(42, 46, 43, .05);
+  border-radius: 6px;
+  padding: .1em .35em;
+}
+
+html[data-perfguard-polish=on] [data-chat-turn] { max-width: 800px; padding: 12px 26px; }
+html[data-perfguard-polish=on] [data-composer-seat] > * {
+  border-radius: 24px !important;
+  box-shadow: 0 1px 1px rgba(30, 38, 33, .05), 0 18px 44px -26px rgba(30, 38, 33, .45) !important;
+}
+html[data-perfguard-polish=on] [data-composer-seat] > *:focus-within {
+  border-color: rgba(124, 155, 139, .55) !important;
+  box-shadow: 0 0 0 4px rgba(124, 155, 139, .14), 0 18px 44px -26px rgba(30, 38, 33, .45) !important;
+}
