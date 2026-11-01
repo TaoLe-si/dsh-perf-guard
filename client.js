@@ -38,6 +38,17 @@ window.__ModuleLoader__.load({
     const HEAVY_DOM_NODES = 12000
     const HEAVY_HEAP_BYTES = 1.1 * 1024 ** 3
 
+    /** 运行时自检状态：设置页展示，同时挂到 window 上方便排查。 */
+    const runtime = {
+      scroller: false,
+      pinned: true,
+      thinkSeen: 0,
+      thinkOpened: 0,
+      seatOpened: 0,
+      follows: 0,
+      lastFollowAt: 0,
+    }
+
     const CSS = [
       /* 过程块与工具块：默认离屏跳过布局与绘制。 */
       '[data-perfguard-cv="on"] [data-step-process],',
@@ -77,16 +88,16 @@ window.__ModuleLoader__.load({
       '  overflow: auto;',
       '}',
       /* 设置页样式（全部走主题变量，深浅色自动跟随）。 */
-      '.dsh-pg { display: flex; flex-direction: column; gap: 18px; max-width: 860px; padding: 4px 2px 28px; }',
+      '.dsh-pg { display: flex; flex-direction: column; gap: 22px; max-width: 820px; padding: 10px 4px 40px; }',
       '.dsh-pg-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }',
       '.dsh-pg-head-main { display: flex; flex-direction: column; gap: 6px; }',
       '.dsh-pg-badge { flex: none; font-size: 11px; line-height: 1; padding: 5px 9px; border-radius: 999px; border: 1px solid var(--dsh-border, rgba(127,127,127,.3)); opacity: .68; }',
-      '.dsh-pg-group { display: flex; flex-direction: column; gap: 8px; }',
+      '.dsh-pg-group { display: flex; flex-direction: column; gap: 10px; }',
       '.dsh-pg-group-title { font-size: 13px; font-weight: 600; opacity: .85; }',
       '.dsh-pg-group-hint { font-size: 12px; line-height: 1.6; opacity: .55; margin-bottom: 2px; }',
       '.dsh-pg-title { font-size: 14px; font-weight: 600; opacity: .9; }',
       '.dsh-pg-desc { font-size: 12px; line-height: 1.7; opacity: .62; }',
-      '.dsh-pg-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 10px 12px; border: 1px solid var(--dsh-border, rgba(127,127,127,.24)); border-radius: 10px; }',
+      '.dsh-pg-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 12px 14px; border: 1px solid var(--dsh-border, rgba(127,127,127,.24)); border-radius: 12px; background: var(--dsh-fill-1, rgba(127,127,127,.03)); }',
       '.dsh-pg-row-main { display: flex; flex-direction: column; gap: 4px; }',
       '.dsh-pg-row b { font-size: 13px; font-weight: 600; }',
       '.dsh-pg-row span { font-size: 12px; line-height: 1.6; opacity: .62; }',
@@ -95,7 +106,7 @@ window.__ModuleLoader__.load({
       '.dsh-pg-switch[data-on="true"] { background: var(--dsh-accent, #4c8dff); border-color: transparent; }',
       '.dsh-pg-switch[data-on="true"]::after { transform: translateX(16px); background: #fff; }',
       '.dsh-pg-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }',
-      '.dsh-pg-card { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--dsh-border, rgba(127,127,127,.24)); }',
+      '.dsh-pg-card { padding: 12px 14px; border-radius: 12px; border: 1px solid var(--dsh-border, rgba(127,127,127,.24)); background: var(--dsh-fill-1, rgba(127,127,127,.03)); }',
       '.dsh-pg-card em { display: block; font-style: normal; font-size: 11px; opacity: .55; margin-bottom: 4px; }',
       '.dsh-pg-card strong { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }',
       '.dsh-pg-list { margin: 0; padding: 0 0 0 16px; font-size: 12px; line-height: 1.8; opacity: .75; }',
@@ -114,7 +125,13 @@ window.__ModuleLoader__.load({
 
     function injectStylesheet() {
       if (typeof document === 'undefined') return
-      if (document.getElementById(STYLE_ID)) return
+      const existing = document.getElementById(STYLE_ID)
+      if (existing !== null) {
+        // 插件热更新后旧的 <style> 会留在页面上，必须覆盖：否则新类名没有样式，
+        // 设置页会退化成浏览器默认字号（曾经踩过）。
+        if (existing.textContent !== CSS) existing.textContent = CSS
+        return
+      }
       const style = document.createElement('style')
       style.id = STYLE_ID
       style.textContent = CSS
@@ -222,8 +239,12 @@ window.__ModuleLoader__.load({
     /** 用户手动收起过的元素：不再自动展开。 */
     const USER_CLOSED = new WeakSet()
 
-    function disclosureButton(element) {
-      return element.querySelector('button[aria-expanded]')
+    /**
+     * 展开控件：DisclosureRow 在 expandOnRowClick 下渲染的是 div[role=button][aria-expanded]，
+     * 过程组头部才是真正的 <button>；所以只按 aria-expanded 找，不能限定 button。
+     */
+    function toggleTarget(element) {
+      return element.querySelector('[aria-expanded]')
     }
 
     /**
@@ -238,19 +259,26 @@ window.__ModuleLoader__.load({
       /** 自动开组的时间闸：最多每 800ms 一次，防止流式期间反复点开。 */
       let lastOpenAt = 0
 
+      const seen = new WeakSet()
+
       function clickOnce(element, button) {
-        if (button === null || button.getAttribute('aria-expanded') !== 'false') return
+        if (button === null || button.getAttribute('aria-expanded') !== 'false') return false
         opened.add(element)
         button.click()
+        return true
       }
 
       function reveal(think) {
         if (!isEnabled() || opened.has(think) || USER_CLOSED.has(think)) return
         if (think.getAttribute('data-state') !== 'running') return
+        if (!seen.has(think)) {
+          seen.add(think)
+          runtime.thinkSeen += 1
+        }
         const seat = think.closest(SEAT_SELECTOR)
-        if (seat !== null && !USER_CLOSED.has(seat)) clickOnce(seat, disclosureButton(seat))
+        if (seat !== null && !USER_CLOSED.has(seat) && clickOnce(seat, toggleTarget(seat))) runtime.seatOpened += 1
         if (!think.isConnected) return
-        clickOnce(think, disclosureButton(think))
+        if (clickOnce(think, toggleTarget(think))) runtime.thinkOpened += 1
       }
 
       /**
@@ -261,7 +289,8 @@ window.__ModuleLoader__.load({
         if (!isEnabled()) return
         const now = Date.now()
         if (now - lastOpenAt < 800) return
-        if (document.querySelector('[data-streaming]') === null) return
+        // data-streaming 要等 assistant 文本出现；过程组头部的 TextShimmer 在开始思考时就有 data-shimmer。
+        if (document.querySelector('[data-streaming], [data-shimmer]') === null) return
         let latest = null
         let latestTurn = -1
         for (const seat of document.querySelectorAll(SEAT_SELECTOR)) {
@@ -273,9 +302,9 @@ window.__ModuleLoader__.load({
           latestTurn = turn
         }
         if (latest === null || USER_CLOSED.has(latest) || opened.has(latest)) return
-        if (disclosureButton(latest)?.getAttribute('aria-expanded') !== 'false') return
+        if (toggleTarget(latest)?.getAttribute('aria-expanded') !== 'false') return
         lastOpenAt = now
-        clickOnce(latest, disclosureButton(latest))
+        if (clickOnce(latest, toggleTarget(latest))) runtime.seatOpened += 1
       }
 
       function scan(root) {
@@ -338,14 +367,18 @@ window.__ModuleLoader__.load({
     function installFollowTail(isEnabled) {
       let pinned = true
       let frame = 0
-      let scroller = null
-      let attached = null
+      let active = null
+      const observed = new WeakSet()
       const positions = new WeakMap()
 
-      function findScroller() {
-        if (scroller !== null && scroller.isConnected) return scroller
-        scroller = document.querySelector(SCROLL_SELECTOR)
-        return scroller
+      /** 页面上可能同时存在多个 [data-conversation-scroll]（主对话 + 侧栏预览），取最大的可见那个。 */
+      function pickScroller() {
+        let best = null
+        for (const element of document.querySelectorAll(SCROLL_SELECTOR)) {
+          if (element.clientHeight <= 0) continue
+          if (best === null || element.clientHeight > best.clientHeight) best = element
+        }
+        return best
       }
 
       function bottomGap(element) {
@@ -354,18 +387,35 @@ window.__ModuleLoader__.load({
 
       function tick() {
         frame = 0
-        const element = findScroller()
+        const element = pickScroller()
         if (element === null || !pinned || !isEnabled()) return
         const gap = bottomGap(element)
         if (gap <= 1) return
         element.scrollTop = element.scrollTop + Math.max(1, gap * 0.3)
         positions.set(element, { top: element.scrollTop, height: element.scrollHeight })
+        runtime.follows += 1
+        runtime.lastFollowAt = Date.now()
         frame = window.requestAnimationFrame(tick)
       }
 
       function follow() {
         if (!isEnabled() || !pinned || frame !== 0) return
         frame = window.requestAnimationFrame(tick)
+      }
+
+      function adopt(element) {
+        if (element === null) return
+        if (!observed.has(element)) {
+          observed.add(element)
+          observer.observe(element, { childList: true, subtree: true, characterData: true })
+        }
+        if (element !== active) {
+          active = element
+          pinned = bottomGap(element) <= 24
+          positions.set(element, { top: element.scrollTop, height: element.scrollHeight })
+        }
+        runtime.scroller = true
+        runtime.pinned = pinned
       }
 
       const onScroll = (event) => {
@@ -377,10 +427,14 @@ window.__ModuleLoader__.load({
         positions.set(element, { top: element.scrollTop, height: element.scrollHeight })
         if (gap <= 24) {
           pinned = true
+          runtime.pinned = true
           return
         }
         // 只有「位置真的往上走」才脱离；内容变高导致的 gap 变大不算。
-        if (movedUp) pinned = false
+        if (movedUp) {
+          pinned = false
+          runtime.pinned = false
+        }
       }
 
       const onWheel = (event) => {
@@ -390,31 +444,28 @@ window.__ModuleLoader__.load({
         if (target.closest('[data-step-process-body]') !== null) return
         const element = target.closest(SCROLL_SELECTOR)
         if (element === null || event.deltaY >= 0) return
-        if (bottomGap(element) > 64) pinned = false
+        if (bottomGap(element) > 64) {
+          pinned = false
+          runtime.pinned = false
+        }
       }
 
       const onKeyDown = (event) => {
         if (event.key !== 'PageUp' && event.key !== 'ArrowUp' && event.key !== 'Home') return
-        const element = findScroller()
-        if (element !== null && bottomGap(element) > 64) pinned = false
+        const element = pickScroller()
+        if (element !== null && bottomGap(element) > 64) {
+          pinned = false
+          runtime.pinned = false
+        }
       }
 
       const observer = new MutationObserver(() => {
+        adopt(pickScroller())
         follow()
       })
 
-      function attach() {
-        const element = findScroller()
-        if (element === null || element === attached) return
-        if (attached !== null) observer.disconnect()
-        attached = element
-        pinned = bottomGap(element) <= 24
-        positions.set(element, { top: element.scrollTop, height: element.scrollHeight })
-        observer.observe(element, { childList: true, subtree: true, characterData: true })
-      }
-
-      attach()
-      const attachTimer = window.setInterval(attach, 1500)
+      adopt(pickScroller())
+      const attachTimer = window.setInterval(() => adopt(pickScroller()), 1500)
 
       document.addEventListener('scroll', onScroll, { capture: true, passive: true })
       document.addEventListener('wheel', onWheel, { capture: true, passive: true })
@@ -429,7 +480,6 @@ window.__ModuleLoader__.load({
         document.removeEventListener('keydown', onKeyDown, { capture: true })
       }
     }
-
     function Switch(props) {
       return h('button', {
         type: 'button',
@@ -541,6 +591,20 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dsh-pg-card' }, h('em', null, '宿主进程 RSS'), h('strong', null, host ? formatMb(host.host.rss) : '未连接')),
           h('div', { className: 'dsh-pg-card' }, h('em', null, '会话日志总量'), h('strong', null, sessions ? formatMb(sessions.totalBytes) : '未扫描')),
         ),
+        h(
+          'section',
+          { className: 'dsh-pg-group' },
+          h('div', { className: 'dsh-pg-group-title' }, '自检'),
+          h('div', { className: 'dsh-pg-group-hint' }, '跟随或展开没生效时先看这里；也可以在 DevTools 里执行 window.__dshPerfGuard 查看实时状态。'),
+          h(
+            'div',
+            { className: 'dsh-pg-grid' },
+            h('div', { className: 'dsh-pg-card' }, h('em', null, '滚动容器'), h('strong', null, runtime.scroller ? '已连接' : '未找到')),
+            h('div', { className: 'dsh-pg-card' }, h('em', null, '跟随状态'), h('strong', null, runtime.pinned ? '贴底跟随中' : '已脱离')),
+            h('div', { className: 'dsh-pg-card' }, h('em', null, '思考行 发现/展开'), h('strong', null, runtime.thinkSeen + ' / ' + runtime.thinkOpened)),
+            h('div', { className: 'dsh-pg-card' }, h('em', null, '跟随次数'), h('strong', null, String(runtime.follows))),
+          ),
+        ),
         sessions && sessions.largest.length > 0
           ? h(
               'div',
@@ -567,6 +631,11 @@ window.__ModuleLoader__.load({
 
     function apply(ctx) {
       injectStylesheet()
+      try {
+        window.__dshPerfGuard = runtime
+      } catch {
+        // 只读环境下忽略。
+      }
       const initial = readPrefs()
       applyPrefs(initial)
 

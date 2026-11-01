@@ -15,7 +15,7 @@ import { join } from 'node:path'
 
 export const inject = ['webServer']
 
-const VERSION = '0.3.0'
+const VERSION = '0.4.0'
 const ROUTE_PREFIX = '/api/perf-guard'
 /** 会话目录扫描结果缓存：目录很大时避免每次打开设置页都重新遍历。 */
 const SESSION_SCAN_TTL_MS = 60 * 1000

@@ -31,6 +31,7 @@ globalThis.document = {
   removeEventListener() {},
   getElementsByTagName: () => ({ length: 5321 }),
   querySelector: () => null,
+  querySelectorAll: () => [],
 }
 root.querySelectorAll = () => []
 root.matches = () => false

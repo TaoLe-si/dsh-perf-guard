@@ -1,6 +1,6 @@
 {
   "name": "dsh-perf-guard",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "DSH 性能守卫：长会话滚动降载、思考链自动展开、贴底跟随与宿主内存诊断。",
   "type": "module",
   "main": "index.js",
