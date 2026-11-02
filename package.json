@@ -1,6 +1,6 @@
 {
   "name": "dsh-perf-guard",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "DSH 长会话优化插件：贴底跟随、思考链自动展开、截断/传输失败自动重试、待办常驻面板、离屏渲染降载。",
   "type": "module",
   "main": "index.js",

@@ -29,6 +29,7 @@ DSH（DeepSeek Harness）的长会话体验插件：**贴底跟随、思考链�
 | HTTP 500 / 504 | 同上（需在设置里打开） | 重试 |
 | `TRANSPORT` / `STREAM_*` / `TIMEOUT` / `ETIMEDOUT` | 错误码或消息（含 `Request timed out.`、`stream idle timeout`） | 重试 |
 | 上游空转 | 强信号「没有产出 / 空响应 / no output / empty completion」；弱信号「稍后重试」须同时出现 上游/网关/中转/超时 语境 | 重试 |
+| 上游输出中断 | 回合级错误（`上游输出中断`、`中断，请重试`）：`agent/request-error` 返回 `{ kind: 'retry' }` | 重试 |
 | 静默截断 | 流结束但没有 `finish` chunk | 重试 |
 | 长度截断 | `finish.reason.stopReason` 命中 `length/max_tokens/max_output` | 重试并记录 |
 

@@ -20,7 +20,7 @@ import { zstdDecompressSync } from 'node:zlib'
 
 export const inject = ['webServer']
 
-const VERSION = '1.0.4'
+const VERSION = '1.0.5'
 const ROUTE_PREFIX = '/api/perf-guard'
 const SESSION_SCAN_TTL_MS = 60 * 1000
 const MONITOR_INTERVAL_MS = 30 * 1000
@@ -208,7 +208,7 @@ function statusOf(failure, error) {
   return null
 }
 
-const TRANSPORT_PATTERN = /TRANSPORT|STREAM|TRUNCATED|TIMEOUT|ETIMEDOUT|timed out|request timeout|terminated|Connection error|stream ended|socket hang up|ECONNRESET|other side closed|premature close|unexpected end/i
+const TRANSPORT_PATTERN = /TRANSPORT|STREAM|TRUNCATED|TIMEOUT|ETIMEDOUT|timed out|request timeout|terminated|Connection error|stream ended|socket hang up|ECONNRESET|other side closed|premature close|unexpected end|上游输出中断|输出中断|连接中断|中断，请重试|上游中断/i
 
 /**
  * 上游「这一轮什么都没产出」的失败（强信号）。
@@ -738,6 +738,55 @@ export function apply(ctx) {
     const off = child.on('llm/stream', (options, next) => withRetryAndLogging(child, options, next))
     child.effect(() => () => off())
     logger?.info?.('perf-guard: llm/stream middleware attached')
+
+    // agent/request-error：宿主把「上游输出中断」这类失败包成 turn 级错误，
+    // llm/stream 里已经看不到，只能在这一层要求重试。
+    const attempts = new Map()
+    const offAgent = child.on('agent/request-error', async (payload, next) => {
+      try {
+        const prefs = await loadRetryPrefs()
+        if (!prefs.retryTransport) return next()
+        const failure = payload?.failure
+        const message = String(failure?.message ?? '')
+        const code = String(failure?.code ?? '')
+        if (!isTransportFailure(failure, undefined, message)) return next()
+        const key = String(payload?.provider ?? '-') + ':' + String(payload?.turn ?? '-') + ':' + String(payload?.step ?? '-')
+        const used = attempts.get(key) ?? 0
+        if (prefs.maxRetries >= 0 && used >= prefs.maxRetries) {
+          attempts.delete(key)
+          return next()
+        }
+        attempts.set(key, used + 1)
+        if (attempts.size > 200) attempts.clear()
+        const delay = Math.min(800 * 2 ** used, 15_000)
+        recordError({
+          at: new Date().toISOString(),
+          kind: 'transport',
+          status: null,
+          code: code || 'UPSTREAM_INTERRUPTED',
+          provider: payload?.provider ?? null,
+          model: null,
+          attempt: used + 1,
+          retryAfterMs: null,
+          message: message.slice(0, 600),
+        })
+        child.logger?.warn?.(
+          'perf-guard: agent retry %s/%s in %sms · %s · %s',
+          used + 1,
+          prefs.maxRetries < 0 ? 'inf' : prefs.maxRetries,
+          delay,
+          payload?.provider ?? '-',
+          message.slice(0, 200),
+        )
+        await sleep(delay, payload?.signal)
+        return { kind: 'retry' }
+      } catch (error) {
+        child.logger?.warn?.('perf-guard: agent retry decision failed: %s', error instanceof Error ? error.message : String(error))
+        return next()
+      }
+    })
+    child.effect(() => () => offAgent())
+    logger?.info?.('perf-guard: agent/request-error retry attached')
   })
 
   let warned = false
