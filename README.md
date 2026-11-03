@@ -1,6 +1,5 @@
 # dsh-perf-guard
 
-DSH（DeepSeek Harness）的长会话体验插件：**贴底跟随、思考链自动展开、截断/传输失败重试、待办常驻、离屏降载**。
 
 只改行为，**不改任何主题、配色或布局**。
 
@@ -47,12 +46,6 @@ DSH（DeepSeek Harness）的长会话体验插件：**贴底跟随、思考链�
   「没产出 / 空响应」本身即充分，「稍后重试」只有在同一句里出现上游/网关/超时语境时才成立。
   ⚠️ 若同时开了「不限」重试，而上游持续不产出，会持续重试下去（退避封顶 15s）。
 
-### 4. 待办常驻面板（默认开）
-
-- 数据源：`~/.dsh/storages/session_projcache/sessions/<sessionId>.json` 的 `todos.val`（与 UI 同源），日志解析作兜底。
-- 渲染在 `shell.overlay` 常驻层：切会话、插入消息都不会消失；无待办时不占位。
-- 按 `in_progress → pending → completed` 排序，完成项划线降透明；每会话 localStorage 缓存兜底。
-
 ### 5. 长会话降载（默认开）
 
 - 离屏过程块 `content-visibility: auto`（整回合版本为实验项，默认关）。
@@ -93,7 +86,6 @@ dsh plugin --profile desktop add link:/absolute/path/to/dsh-perf-guard
 | --- | --- |
 | `GET /api/perf-guard/health` | 版本探活 |
 | `GET /api/perf-guard/stats` | 宿主内存、会话日志排行、重试配置、最近错误 |
-| `GET /api/perf-guard/todos?sessionId=` | 该会话待办快照 |
 | `GET/POST /api/perf-guard/retry` | 读取/更新重试配置 |
 
 除 `/assets/*` 外均要求 `x-dsh-plugin: perf-guard` 头。
@@ -117,7 +109,6 @@ npm test
 ## 已知限制
 
 - 长度截断（`max_tokens`）重试通常无效，应调大模型 `maxTokens`。
-- 待办面板依赖投影缓存文件；缺失时退回会话日志解析。
 - 仅做渲染层优化，不降低宿主解压会话日志的内存峰值。
 
 ## License

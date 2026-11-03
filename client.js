@@ -155,15 +155,6 @@ window.__ModuleLoader__.load({
       '.dsh-pg-card strong { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }',
       '.dsh-pg-list { margin: 0; padding: 0 0 0 16px; font-size: 12px; line-height: 1.8; opacity: .75; }',
       '.dsh-pg-actions { display: flex; gap: 8px; }',
-      '.dsh-pg-todos { position: fixed; right: 22px; top: 118px; width: 274px; max-height: 44vh; overflow: auto; padding: 14px 16px 12px; border-radius: 18px; border: 1px solid var(--pg-hairline, rgba(127,127,127,.16)); background: linear-gradient(180deg, rgba(251,250,247,.94), rgba(245,243,236,.9)); backdrop-filter: blur(16px) saturate(1.25); box-shadow: 0 1px 1px rgba(30,38,33,.04), 0 18px 44px -26px rgba(30,38,33,.4); font-size: 12.5px; line-height: 1.6; z-index: 40; }',
-      '.dsh-pg-todos-title { display: flex; align-items: center; gap: 6px; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--pg-ink-soft, rgba(107,115,112,.9)); margin-bottom: 10px; }',
-      '.dsh-pg-todos-title::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: #7C9B8B; box-shadow: 0 0 0 3px rgba(124,155,139,.16); }',
-      '.dsh-pg-todo { display: flex; gap: 8px; align-items: flex-start; padding: 3px 0; }',
-      '.dsh-pg-todo-dot { flex: none; width: 6px; height: 6px; margin-top: 6px; border-radius: 50%; background: rgba(127,127,127,.45); }',
-      '.dsh-pg-todo[data-status="in_progress"] .dsh-pg-todo-dot { background: #7C9B8B; box-shadow: 0 0 0 3px rgba(124,155,139,.18); }',
-      '.dsh-pg-todo[data-status="completed"] .dsh-pg-todo-dot { background: #B9C7B9; }',
-      '.dsh-pg-todo[data-status="completed"] .dsh-pg-todo-text { opacity: .45; text-decoration: line-through; }',
-      '.dsh-pg-todo-text { min-width: 0; overflow-wrap: anywhere; }',
       '.dsh-pg-input { width: 72px; font-size: 13px; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--dsh-border, rgba(127,127,127,.3)); background: transparent; color: inherit; text-align: center; }',
       '.dsh-pg-errors { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }',
       '.dsh-pg-error { display: flex; gap: 10px; align-items: baseline; padding: 6px 10px; border-radius: 8px; background: var(--dsh-fill-1, rgba(127,127,127,.05)); }',
@@ -632,124 +623,6 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /** 待办常驻：从宿主读会话日志里的 todo 快照，切会话/插话都不会丢。 */
-    const todoStore = { sessionId: null, todos: [], at: 0, listeners: new Set() }
-
-    function publishTodos(next) {
-      todoStore.sessionId = next.sessionId
-      todoStore.todos = next.todos
-      todoStore.at = Date.now()
-      try {
-        window.localStorage.setItem('dsh-perf-guard:todos:' + next.sessionId, JSON.stringify(next.todos))
-      } catch {
-        // 忽略存储失败
-      }
-      for (const listener of todoStore.listeners) listener()
-    }
-
-    function currentSessionId() {
-      const node = document.querySelector('[data-conversation-content]')
-      return node === null ? null : node.getAttribute('data-conversation-session')
-    }
-
-    async function refreshTodos() {
-      const sessionId = currentSessionId()
-      if (sessionId === null) return
-      if (todoStore.sessionId !== sessionId) {
-        let cached = []
-        try {
-          cached = JSON.parse(window.localStorage.getItem('dsh-perf-guard:todos:' + sessionId) || '[]')
-        } catch {
-          cached = []
-        }
-        publishTodos({ sessionId, todos: cached })
-      }
-      try {
-        const response = await fetch(API + '/todos?sessionId=' + encodeURIComponent(sessionId), {
-          headers: { 'x-dsh-plugin': 'perf-guard' },
-        })
-        if (!response.ok) return
-        const data = await response.json()
-        if (Array.isArray(data.todos) && data.todos.length > 0) publishTodos({ sessionId, todos: data.todos })
-      } catch {
-        // 宿主不可用时保留缓存
-      }
-    }
-
-    function installTodoSync() {
-      refreshTodos()
-      const timer = window.setInterval(refreshTodos, 4000)
-      const observer = new MutationObserver(() => {
-        const sessionId = currentSessionId()
-        if (sessionId !== null && sessionId !== todoStore.sessionId) refreshTodos()
-      })
-      observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-conversation-session'] })
-      return () => {
-        window.clearInterval(timer)
-        observer.disconnect()
-      }
-    }
-
-    /**
-     * 对话区是否是「当前可见的那一层」。
-     * 设置页、插件页等是在对话之上覆盖的视图，对话 DOM 仍在（高度也非 0），
-     * 所以用中心点命中测试判断：命中的元素不在 [data-conversation-content] 里就说明被盖住了。
-     */
-    function isConversationActive() {
-      const content = document.querySelector('[data-conversation-content]')
-      if (content === null || content.getClientRects().length === 0) return false
-      const x = Math.round(window.innerWidth * 0.5)
-      const y = Math.round(window.innerHeight * 0.35)
-      const hit = document.elementFromPoint(x, y)
-      if (hit === null) return false
-      return content.contains(hit)
-    }
-
-    function TodoPanel() {
-      const [, force] = React.useState(0)
-      const [active, setActive] = React.useState(() => isConversationActive())
-      React.useEffect(() => {
-        const listener = () => force((value) => value + 1)
-        todoStore.listeners.add(listener)
-        return () => todoStore.listeners.delete(listener)
-      }, [])
-      React.useEffect(() => {
-        let frame = 0
-        const evaluate = () => {
-          frame = 0
-          const next = isConversationActive()
-          setActive((current) => (current === next ? current : next))
-        }
-        const schedule = () => {
-          if (frame !== 0) return
-          frame = window.requestAnimationFrame(evaluate)
-        }
-        const timer = window.setInterval(schedule, 700)
-        const observer = new MutationObserver(schedule)
-        observer.observe(document.documentElement, { childList: true, subtree: true })
-        return () => {
-          window.clearInterval(timer)
-          observer.disconnect()
-          window.cancelAnimationFrame(frame)
-        }
-      }, [])
-      if (!active) return null
-      if (todoStore.todos.length === 0) return null
-      const order = { in_progress: 0, pending: 1, completed: 2 }
-      const items = [...todoStore.todos].sort((left, right) => (order[left.status] ?? 3) - (order[right.status] ?? 3))
-      return h(
-        'div',
-        { className: 'dsh-pg-todos' },
-        h('div', { className: 'dsh-pg-todos-title' }, '待办 · ' + todoStore.todos.filter((item) => item.status === 'completed').length + '/' + todoStore.todos.length),
-        ...items.slice(0, 12).map((item, index) =>
-          h('div', { className: 'dsh-pg-todo', key: String(index), 'data-status': item.status },
-            h('span', { className: 'dsh-pg-todo-dot' }),
-            h('span', { className: 'dsh-pg-todo-text' }, item.content),
-          ),
-        ),
-      )
-    }
-
     /** 中键关闭标签页（dockkit 标签 chip 上的 [data-dockkit-tab-close]）。 */
     function installMiddleClickClose() {
       const onAuxClick = (event) => {
@@ -1102,10 +975,6 @@ window.__ModuleLoader__.load({
       ctx.effect(() => installFollowTail(() => readPrefs().followTail))
       ctx.effect(() => installMotion(() => readPrefs().motion))
       ctx.effect(() => installMiddleClickClose())
-      ctx.effect(() => installTodoSync())
-      ctx.slots.inject('shell.overlay', () =>
-        ctx.slots.register({ name: 'shell.overlay', id: 'perf-guard-todos', order: 900 }, TodoPanel),
-      )
 
       ctx.slots.inject('settings.section', () =>
         ctx.slots.register(
