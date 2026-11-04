@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url'
 
 export const inject = ['webServer']
 
-const VERSION = '1.1.0'
+const VERSION = '1.1.1'
 const ROUTE_PREFIX = '/api/perf-guard'
 const SESSION_SCAN_TTL_MS = 60 * 1000
 const MONITOR_INTERVAL_MS = 30 * 1000
@@ -219,11 +219,14 @@ const TRANSPORT_PATTERN = /TRANSPORT|STREAM|TRUNCATED|TIMEOUT|ETIMEDOUT|timed ou
  */
 const NO_OUTPUT_PATTERN = /没有产出|未产出|无输出|没输出|空响应|no output|produced no (?:output|content|response|text)|empty (?:response|completion|reply)/i
 
+/** 账号池/中转排队这类瞬时拥塞（强信号：繁忙本身就是临时的，等一会儿就会好）。 */
+const BUSY_PATTERN = /账号池|号池|池繁忙|繁忙|排队|拥挤|overloaded|server busy|too many requests/i
+
 /** 「稍后重试」这种弱信号，只有配合上游/超时语境才足以判定为空转。 */
 const RETRY_LATER_PATTERN = /稍后重试|稍后再试|(?:please )?(?:retry|try) (?:again )?later/i
 
 /** 弱信号的语境条件：不能说"任何带请稍后重试的错误都重试"。 */
-const UPSTREAM_CONTEXT_PATTERN = /上游|网关|中转|超时|upstream|gateway|proxy|timeout|timed out|timed-out/i
+const UPSTREAM_CONTEXT_PATTERN = /上游|网关|中转|超时|账号池|号池|upstream|gateway|proxy|timeout|timed out|timed-out/i
 
 /**
  * 判定一次失败是否属于「上游空转」。
@@ -238,6 +241,7 @@ const UPSTREAM_CONTEXT_PATTERN = /上游|网关|中转|超时|upstream|gateway|p
 function isUpstreamStall(text) {
   if (typeof text !== 'string' || text.length === 0) return false
   if (NO_OUTPUT_PATTERN.test(text)) return true
+  if (BUSY_PATTERN.test(text)) return true
   return RETRY_LATER_PATTERN.test(text) && UPSTREAM_CONTEXT_PATTERN.test(text)
 }
 

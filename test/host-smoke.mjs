@@ -105,6 +105,9 @@ test('isTransportFailure：识别传输/截断，排除用户取消', () => {
   assert.equal(isTransportFailure({ code: 'LLM_ERROR', message: '本轮运行失败上游输出中断，请重试' }), true)
   assert.equal(isTransportFailure(undefined, new Error('上游输出中断，请重试')), true)
   assert.equal(isTransportFailure({ code: 'INVALID_CONFIG', message: 'missing stateDir' }), false)
+  assert.equal(isTransportFailure(undefined, new Error('账号池繁忙，请稍后重试')), true)
+  assert.equal(isTransportFailure({ code: 'LLM_ERROR', message: '账号池繁忙，请稍后重试' }), true)
+  assert.equal(isTransportFailure(undefined, new Error('余额不足，请稍后重试')), false)
 })
 
 test('isTransportFailure：上游「没有产出，请稍后重试」也归入可重试', () => {
