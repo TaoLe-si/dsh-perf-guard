@@ -9,7 +9,7 @@ Perf Guard for DSH reduces transcript rendering work, respects native scrolling 
 在 DSH 的插件管理界面添加下面的 GitHub 来源。使用 CLI 时，将 `desktop` 换成实际 profile 名；Web 通常为 `web`。
 
 ```sh
-dsh plugin --profile desktop add github:TaoLe-si/dsh-perf-guard#v1.9.1
+dsh plugin --profile desktop add github:TaoLe-si/dsh-perf-guard#v1.9.2
 ```
 
 也可从 [GitHub Releases](https://github.com/TaoLe-si/dsh-perf-guard/releases) 获取固定版本的安装包。不需要 npm 账号或额外构建步骤。不要在同一个 profile 中同时使用 Bundle 安装和手工插入插件行。

@@ -693,7 +693,7 @@ window.__ModuleLoader__.load({
      */
     function installHoverIntent(isEnabled) {
       const QUIET_MS = 140
-      let lastMoveAt = 0
+      let lastMoveAt = Number.NEGATIVE_INFINITY
       let activeEl = null
       let pendingEl = null
       let timer = 0
@@ -704,12 +704,16 @@ window.__ModuleLoader__.load({
       /** 指针停稳后，把 final 状态一次性补发给 React。 */
       const settle = () => {
         timer = 0
-        const target = pendingEl
-        pendingEl = null
-        if (Date.now() - lastMoveAt < QUIET_MS) {
+        if (!isEnabled()) {
+          pendingEl = null
+          return
+        }
+        if (performance.now() - lastMoveAt < QUIET_MS) {
           schedule()
           return
         }
+        const target = pendingEl
+        pendingEl = null
         const want = target !== null && target.isConnected === true && target.matches(':hover') ? target : null
         if (want === activeEl) return
         replaying = true
@@ -730,12 +734,12 @@ window.__ModuleLoader__.load({
 
       const schedule = () => {
         if (timer !== 0) return
-        const wait = Math.max(16, QUIET_MS - (Date.now() - lastMoveAt))
+        const wait = Math.max(16, QUIET_MS - (performance.now() - lastMoveAt))
         timer = window.setTimeout(settle, wait)
       }
 
-      const onPointerMove = (event) => {
-        lastMoveAt = event.timeStamp
+      const onPointerMove = () => {
+        lastMoveAt = performance.now()
       }
       const onOver = (event) => {
         if (replaying || !isEnabled()) return

@@ -32,6 +32,18 @@ class FakeElement {
 const listeners = new Map()
 const reachedReact = []
 const replayed = []
+const timers = new Map()
+let clock = 0
+let nextTimer = 0
+
+function advance(ms) {
+  clock += ms
+  for (const [id, { at, fn }] of [...timers]) {
+    if (at > clock) continue
+    timers.delete(id)
+    fn()
+  }
+}
 
 globalThis.Element = FakeElement
 globalThis.MutationObserver = class { observe() {} disconnect() {} }
@@ -52,8 +64,11 @@ globalThis.window = {
     getItem: (key) => (store.has(key) ? store.get(key) : null),
     setItem: (key, value) => { store.set(key, value) },
   },
-  setTimeout,
-  clearTimeout,
+  setTimeout(fn, delay) {
+    timers.set(++nextTimer, { at: clock + delay, fn })
+    return nextTimer
+  },
+  clearTimeout(id) { timers.delete(id) },
   setInterval,
   clearInterval,
   requestAnimationFrame: () => 1,
@@ -79,7 +94,7 @@ globalThis.document = {
   querySelector: () => null,
   querySelectorAll: () => [],
 }
-globalThis.performance = { memory: { usedJSHeapSize: 512 * 1024 * 1024 } }
+globalThis.performance = { now: () => clock }
 
 await import(new URL('../client.js', import.meta.url).href)
 if (!captured) throw new Error('模块没有被加载')
@@ -125,20 +140,24 @@ test('悬停防抖：移动中的 pointerover 不会到达 React', async () => {
   off()
 })
 
-test('悬停防抖：指针停稳后补发一次 pointerover', async () => {
+test('悬停防抖：移动推迟的回调不丢失待处理目标', (t) => {
   listeners.clear()
   reachedReact.length = 0
   replayed.length = 0
-  const off = installHoverIntent(() => true)
+  t.after(installHoverIntent(() => true))
   const rowA = new FakeElement(true)
   fire('pointermove', rowA)
   fire('pointerover', rowA)
   assert.equal(reachedReact.length, 0)
-  // 等过静止阈值
-  await new Promise((resolve) => setTimeout(resolve, 220))
-  assert.ok(reachedReact.length >= 1, '停稳后应补发 pointerover')
-  assert.ok(replayed.includes('pointerover'), '补发的是合成分散事件')
-  off()
+  advance(120)
+  fire('pointermove', rowA)
+  advance(20) // 第一次到期时，最后一次移动只过去 20ms。
+  assert.equal(reachedReact.length, 0)
+  advance(119)
+  assert.equal(reachedReact.length, 0)
+  advance(1)
+  assert.deepEqual(reachedReact, [rowA])
+  assert.deepEqual(replayed, ['pointerover', 'mouseover'])
 })
 
 test('悬停防抖：按住鼠标键时一律放行（拖动多选依赖 pointerenter）', () => {

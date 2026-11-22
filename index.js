@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url'
 
 export const inject = ['webServer']
 
-const VERSION = '1.9.1'
+const VERSION = '1.9.2'
 const ROUTE_PREFIX = '/api/perf-guard'
 const SESSION_SCAN_TTL_MS = 60 * 1000
 const MONITOR_INTERVAL_MS = 30 * 1000
