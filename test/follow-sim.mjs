@@ -1,215 +1,271 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { pathToFileURL } from 'node:url'
 
-/* ---------- 最小 DOM ---------- */
-class FakeElement {
-  constructor(props = {}) {
-    Object.assign(this, props)
+const SCROLL = '[data-conversation-scroll]'
+const SESSION = '[data-conversation-session]'
+const SPACER = '[data-chat-turn-spacer]'
+const FOLLOW = '[data-chat-following-tail]'
+
+class Element {
+  constructor(parent, ...selectors) {
+    this.parent = parent
+    this.selectors = new Set(selectors)
     this.isConnected = true
-    this.clicks = 0
+    this.rect = { top: 0, bottom: 600, height: 600 }
   }
-  matches() { return false }
-  closest() { return null }
-  querySelector() { return null }
-  querySelectorAll() { return [] }
-  addEventListener() {}
-  removeEventListener() {}
-  click() { this.clicks += 1 }
+  matches(selector) { return selector.split(', ').some(piece => this.selectors.has(piece)) }
+  closest(selector) { return this.matches(selector) ? this : this.parent?.closest(selector) ?? null }
+  contains(element) { return element === this || (element.parent != null && this.contains(element.parent)) }
+  getBoundingClientRect() { return this.rect }
 }
 
-function createHarness(options = {}) {
+function harness({ top = 400, native = false } = {}) {
   const listeners = new Map()
-  let rafs = []
+  const frames = new Map()
+  let nextFrame = 0
   let clock = 0
-  const scroller = new FakeElement({
-    clientHeight: options.clientHeight ?? 600,
-    scrollHeight: options.scrollHeight ?? 1000,
-    scrollTop: options.scrollTop ?? 400,
+  let interval
+  let writes = 0
+  let clicks = 0
+  let sessionId = 'first'
+  const session = new Element(null, SESSION)
+  session.getAttribute = () => sessionId
+  const scroller = Object.assign(new Element(session, SCROLL), { clientHeight: 600, scrollHeight: 1000 })
+  const floor = () => scroller.scrollHeight - scroller.clientHeight
+  Object.defineProperty(scroller, 'scrollTop', {
+    get: () => top,
+    set: value => { writes += 1; top = Math.min(value, floor()) },
   })
-  const toBottom = options.toBottom ? new FakeElement() : null
-
+  const chat = new Element(scroller)
+  const spacer = new Element(chat, SPACER)
+  let markers = native ? [spacer] : []
+  scroller.querySelectorAll = selector => selector === SPACER ? markers : []
+  let enabled = true
   const document = {
-    querySelectorAll: (sel) => (sel === '[data-conversation-scroll]' ? [scroller] : []),
-    querySelector: (sel) => (toBottom !== null && String(sel).includes('toBottomSlot') ? toBottom : null),
-    addEventListener(type, fn) {
-      const list = listeners.get(type) || []
-      list.push(fn)
-      listeners.set(type, list)
-    },
-    removeEventListener(type, fn) {
-      listeners.set(type, (listeners.get(type) || []).filter((entry) => entry !== fn))
-    },
+    activeElement: null,
+    querySelectorAll: selector => selector === SCROLL && scroller.isConnected ? [scroller] : [],
+    querySelector: selector => selector.includes('toBottomSlot') ? toBottom : null,
+    addEventListener(type, fn) { listeners.set(type, fn) },
+    removeEventListener(type) { listeners.delete(type) },
   }
-
+  const send = (type, data = {}) => listeners.get(type)?.({ target: scroller, ...data })
+  const move = value => { top = value; send('scroll') }
+  const toBottom = { click() { clicks += 1; move(floor()) } }
   const window = {
-    requestAnimationFrame(cb) { rafs.push(cb); return rafs.length },
-    cancelAnimationFrame() { rafs = [] },
-    setInterval() { return 1 },
-    clearInterval() {},
+    requestAnimationFrame(cb) { frames.set(++nextFrame, cb); return nextFrame },
+    cancelAnimationFrame(id) { frames.delete(id) },
+    setInterval(cb) { interval = cb; return 1 },
+    clearInterval() { interval = undefined },
   }
-
-  const observers = []
-  class MutationObserver {
-    constructor(cb) { this.cb = cb; this.targets = [] ; observers.push(this) }
-    observe(element) { this.targets.push(element) }
-    disconnect() { this.targets = [] }
-    trigger() { if (this.targets.length > 0) this.cb([]) }
-  }
-
-  const performance = { now: () => clock }
-
+  let mutation
+  let observed
   return {
     env: {
-      document,
-      window,
-      performance,
-      MutationObserver,
-      scrollerSelector: '[data-conversation-scroll]',
-      isEnabled: () => true,
+      document, window,
+      isEnabled: () => enabled,
+      performance: { now: () => clock },
+      MutationObserver: class {
+        constructor(cb) { mutation = cb }
+        observe(element) { observed = element }
+        disconnect() { observed = undefined }
+      },
     },
-    scroller,
-    toBottom,
+    scroller, chat, spacer, toBottom, send, move,
+    get observed() { return observed },
+    get writes() { return writes },
+    get clicks() { return clicks },
+    gap: () => floor() - top,
     advance(ms) { clock += ms },
-    flushFrames(limit = 80) {
-      let n = 0
-      while (rafs.length > 0 && n < limit) {
-        const cb = rafs.shift()
-        cb()
-        n += 1
+    session(id) { sessionId = id },
+    enable(value) { enabled = value },
+    mark(elements) { markers = elements },
+    attach() { interval?.() },
+    grow(px) { scroller.scrollHeight += px },
+    mutate() { if (observed) mutation([]) },
+    flush() {
+      let limit = 80
+      while (frames.size > 0) {
+        assert.ok(limit-- > 0, 'animation must converge')
+        const [id, fn] = frames.entries().next().value
+        frames.delete(id)
+        fn()
       }
-      return n
     },
-    dispatch(type, event) {
-      for (const fn of listeners.get(type) || []) fn(event)
-    },
-    grow(bytes) { scroller.scrollHeight += bytes },
-    triggerMutation() { for (const observer of observers) observer.trigger() },
   }
 }
 
-/* ---------- 载入插件的客户端工厂，取到跟随控制器 ---------- */
-let captured = null
-globalThis.window = { __ModuleLoader__: { load: (definition) => { captured = definition } }, localStorage: { getItem: () => null, setItem: () => {} } }
-globalThis.document = { documentElement: { dataset: {}, setAttribute() {}, removeAttribute() {} }, getElementById: () => null, createElement: () => ({}), head: { appendChild() {} }, addEventListener() {}, removeEventListener() {}, getElementsByTagName: () => ({ length: 0 }), querySelector: () => null, querySelectorAll: () => [] }
-globalThis.MutationObserver = class { observe() {} disconnect() {} }
-globalThis.Element = FakeElement
-globalThis.performance = { now: () => 0, memory: { usedJSHeapSize: 0 } }
+let definition
+globalThis.window = { __ModuleLoader__: { load: value => { definition = value } } }
+try {
+  await import(new URL('../client.js', import.meta.url).href)
+} finally {
+  delete globalThis.window
+}
+const { createFollowController, canAutoReveal } = definition.factory(() => ({})).__internals
 
-await import(pathToFileURL(new URL('../client.js', import.meta.url).pathname.replace(/^\//, '')))
-const fakeReact = { createElement: () => null, useState: (v) => [v, () => {}], useEffect() {}, useCallback: (f) => f, memo: (f) => f }
-const mod = captured.factory((name) => {
-  if (name === 'react') return fakeReact
-  throw new Error('unexpected require: ' + name)
-})
-const { createFollowController } = mod.__internals
-
-const gapOf = (scroller) => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
-
-test('贴底时内容增长，缓动追到底部', () => {
-  const h = createHarness({ scrollTop: 400, scrollHeight: 1000 })
+function start(t, options) {
+  const h = harness(options)
   const controller = createFollowController(h.env)
-  const stop = controller.start()
-  assert.equal(controller.state.mode, 'follow')
+  t.after(controller.start())
+  return { h, state: controller.state }
+}
 
-  h.grow(400)
-  h.triggerMutation()
-  h.flushFrames()
-  assert.ok(gapOf(h.scroller) <= 1, 'gap 应收敛到 1px 内，实际 ' + gapOf(h.scroller))
-  stop()
-})
-
-test('用户滚轮上滚后，内容增长不再自动滚动', () => {
-  const h = createHarness({ scrollTop: 400, scrollHeight: 1000 })
-  const controller = createFollowController(h.env)
-  const stop = controller.start()
-
-  h.dispatch('wheel', { deltaY: -120, target: h.scroller })
-  assert.equal(controller.state.mode, 'reading')
-
-  const before = h.scroller.scrollTop
-  h.grow(600)
-  h.triggerMutation()
-  h.flushFrames()
-  assert.equal(h.scroller.scrollTop, before, '阅读模式不得写 scrollTop')
-  stop()
-})
-
-test('布局锚定（无手势的 scrollTop 回退）不解除跟随', () => {
-  const h = createHarness({ scrollTop: 400, scrollHeight: 1000 })
-  const controller = createFollowController(h.env)
-  const stop = controller.start()
-
-  h.grow(400)
-  h.triggerMutation() // 内容变化 → 排队一次追底
-  h.scroller.scrollTop = 340 // 浏览器锚定补偿（无手势）
-  h.dispatch('scroll', { target: h.scroller })
-  assert.equal(controller.state.mode, 'follow')
-
-  h.flushFrames()
-  assert.ok(gapOf(h.scroller) <= 1, '仍应追到底部')
-  stop()
-})
-
-test('滚回底部后恢复跟随', () => {
-  const h = createHarness({ scrollTop: 400, scrollHeight: 1000 })
-  const controller = createFollowController(h.env)
-  const stop = controller.start()
-
-  h.dispatch('wheel', { deltaY: -200, target: h.scroller })
-  assert.equal(controller.state.mode, 'reading')
-  h.advance(1000)
-
-  h.scroller.scrollTop = h.scroller.scrollHeight - h.scroller.clientHeight
-  h.dispatch('scroll', { target: h.scroller })
-  assert.equal(controller.state.mode, 'follow')
-
+test('legacy tail follows growth without clicking the host button', t => {
+  const { h, state } = start(t)
+  assert.equal(state.mode, 'follow')
   h.grow(300)
-  h.triggerMutation()
-  h.flushFrames()
-  assert.ok(gapOf(h.scroller) <= 1, '恢复后应继续跟随')
-  stop()
+  h.mutate()
+  h.flush()
+  assert.ok(h.writes > 0)
+  assert.ok(h.gap() <= 1)
+  assert.equal(h.clicks, 0)
 })
 
-test('阅读模式下不点「回到底部」按钮（避免被拉回底部）', () => {
-  const h = createHarness({ scrollTop: 200, scrollHeight: 1000, toBottom: true })
-  const controller = createFollowController(h.env)
-  const stop = controller.start()
-  assert.equal(controller.state.mode, 'reading')
-
-  h.triggerMutation()
-  h.flushFrames()
-  assert.equal(h.toBottom.clicks, 0)
-  assert.equal(h.scroller.scrollTop, 200)
-  stop()
-})
-
-test('跟随模式下 App 已脱离时点一次「回到底部」，并有节流', () => {
-  const h = createHarness({ scrollTop: 400, scrollHeight: 1000, toBottom: true })
-  const controller = createFollowController(h.env)
-  const stop = controller.start()
-  assert.equal(controller.state.mode, 'follow')
-
-  h.triggerMutation()
-  assert.equal(h.toBottom.clicks, 1)
-  h.triggerMutation()
-  assert.equal(h.toBottom.clicks, 1, '900ms 内不应重复点击')
-
+test('a small upward scroll cancels legacy follow, including a queued frame', t => {
+  const { h, state } = start(t)
+  h.mutate()
+  h.send('wheel', { deltaY: -10 })
+  h.move(390)
   h.advance(1000)
-  h.triggerMutation()
-  assert.equal(h.toBottom.clicks, 2)
-  stop()
+  h.grow(300)
+  h.mutate()
+  h.flush()
+  assert.equal(state.mode, 'reading')
+  assert.equal(h.scroller.scrollTop, 390)
+  assert.equal(h.writes, 0)
+  assert.equal(h.clicks, 0)
 })
 
-test('用户按住滚动条拖动时立即停止写入', () => {
-  const h = createHarness({ scrollTop: 400, scrollHeight: 1000 })
-  const controller = createFollowController(h.env)
-  const stop = controller.start()
+test('legacy layout anchoring adjusts the offset without cancelling follow', t => {
+  const { h, state } = start(t)
+  h.grow(150)
+  h.move(340)
+  h.mutate()
+  h.flush()
+  assert.equal(state.mode, 'follow')
+  assert.ok(h.gap() <= 1)
+})
 
-  h.dispatch('pointerdown', { target: h.scroller })
-  h.grow(400)
-  h.triggerMutation()
-  h.flushFrames()
-  assert.equal(h.scroller.scrollTop, 400)
-  stop()
+test('legacy manual return restores follow; near-bottom and layout shrink do not', t => {
+  const { h, state } = start(t, { top: 200 })
+  h.move(390)
+  assert.equal(state.mode, 'reading')
+  h.grow(-10)
+  h.move(390)
+  assert.equal(state.mode, 'reading')
+  h.grow(80)
+  h.toBottom.click()
+  assert.equal(state.mode, 'follow')
+  h.grow(200)
+  h.mutate()
+  h.flush()
+  assert.ok(h.gap() <= 1)
+  assert.equal(h.clicks, 1)
+})
+
+test('legacy scrollbar movement does not require pointerdown to pause', t => {
+  const { h, state } = start(t)
+  h.move(395)
+  h.grow(200)
+  h.mutate()
+  h.flush()
+  assert.equal(state.mode, 'reading')
+  assert.equal(h.writes, 0)
+})
+
+test('legacy drag blocks writes; input in another scrollport is ignored', t => {
+  const { h, state } = start(t)
+  h.send('wheel', { target: new Element(null, SCROLL), deltaY: -10 })
+  assert.equal(state.mode, 'follow')
+  h.send('pointerdown')
+  h.grow(200)
+  h.mutate()
+  h.flush()
+  assert.equal(h.writes, 0)
+})
+
+test('native Chat owns scrolling in both reading and follow states', t => {
+  const { h, state } = start(t, { top: 200, native: true })
+  assert.equal(state.native, true)
+  assert.equal(h.observed, undefined)
+  h.grow(250)
+  h.mutate()
+  h.flush()
+  assert.equal(h.scroller.scrollTop, 200)
+  assert.equal(h.clicks, 0)
+  h.toBottom.click()
+  assert.equal(h.gap(), 0)
+  h.chat.selectors.add(FOLLOW)
+  h.grow(250)
+  h.mutate()
+  h.flush()
+  assert.equal(h.writes, 0)
+  assert.equal(h.clicks, 1)
+})
+
+test('a late native marker cancels pending legacy writes and survives remount', t => {
+  const { h, state } = start(t)
+  h.grow(150)
+  h.mutate()
+  h.mark([h.spacer])
+  h.flush()
+  assert.equal(state.native, true)
+  assert.equal(h.writes, 0)
+  h.mark([])
+  h.session('second')
+  h.attach()
+  assert.equal(state.native, true)
+  assert.equal(h.observed, undefined)
+})
+
+test('queued legacy frames cannot write to a different session or detached scrollport', t => {
+  const { h, state } = start(t)
+  h.grow(100)
+  h.mutate()
+  h.session('second')
+  h.flush()
+  assert.equal(h.writes, 0)
+  h.attach()
+  h.move(500)
+  h.grow(100)
+  h.mutate()
+  h.scroller.isConnected = false
+  h.flush()
+  h.attach()
+  assert.equal(h.writes, 0)
+  assert.equal(state.attached, null)
+})
+
+test('nested Chat markers do not claim their ancestor scroller; preference still applies', t => {
+  const { h, state } = start(t)
+  const nested = new Element(h.scroller, SCROLL)
+  h.mark([new Element(nested, SPACER)])
+  h.attach()
+  assert.equal(state.native, false)
+  h.grow(100)
+  h.mutate()
+  h.enable(false)
+  h.flush()
+  assert.equal(h.writes, 0)
+})
+
+test('auto-reveal requires the same Chat to be following and the header to be visible', () => {
+  const h = harness({ native: true })
+  const button = new Element(h.chat, 'button')
+  button.ownerDocument = h.env.document
+  button.rect = { top: 100, bottom: 140, height: 40 }
+  assert.equal(canAutoReveal(button), false)
+  h.chat.selectors.add(FOLLOW)
+  assert.equal(canAutoReveal(button), true)
+  h.move(390)
+  assert.equal(canAutoReveal(button), false)
+  h.move(400)
+  button.rect = { top: -5, bottom: 35, height: 40 }
+  assert.equal(canAutoReveal(button), false)
+  button.rect = { top: 100, bottom: 140, height: 40 }
+  h.env.document.activeElement = new Element(h.scroller, 'textarea')
+  assert.equal(canAutoReveal(button), false)
+  h.env.document.activeElement = null
+  button.parent = new Element(h.scroller, FOLLOW)
+  assert.equal(canAutoReveal(button), false)
 })

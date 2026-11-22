@@ -23,7 +23,36 @@ window.__ModuleLoader__.load({
     const API = '/api/perf-guard'
     const STORAGE_KEY = 'dsh-perf-guard:prefs'
     const SCROLL_SELECTOR = '[data-conversation-scroll]'
+    // 新版 Chat 始终渲染折叠占位；following-tail 只在宿主跟随时存在，不能作为能力标记。
+    const NATIVE_CHAT_SELECTOR = '[data-chat-turn-spacer]'
+    const NATIVE_FOLLOW_SELECTOR = '[data-chat-following-tail]'
     const STYLE_ID = 'dsh-perf-guard-style'
+
+    function nativeChatMarker(scroller, selector = SCROLL_SELECTOR) {
+      for (const marker of scroller.querySelectorAll(NATIVE_CHAT_SELECTOR)) {
+        if (marker.closest(selector) === scroller) return marker
+      }
+      return null
+    }
+
+    function bottomGap(scroller) {
+      return Math.max(0, scroller.scrollHeight - scroller.clientHeight) - scroller.scrollTop
+    }
+
+    function canAutoReveal(button) {
+      const scroller = button.closest(SCROLL_SELECTOR)
+      if (scroller === null || !button.isConnected || scroller.clientHeight <= 0 || bottomGap(scroller) > 1) return false
+      const marker = nativeChatMarker(scroller)
+      if (marker !== null && !button.closest(NATIVE_FOLLOW_SELECTOR)?.contains(marker)) return false
+      // 过程组标题会调用 focus()，不能把不可见的标题滚进视口，或抢走输入焦点。
+      if (button.matches('button')) {
+        if (button.ownerDocument.activeElement?.closest('[data-composer-seat], input, textarea, select, [contenteditable="true"]')) return false
+        const row = button.getBoundingClientRect()
+        const viewport = scroller.getBoundingClientRect()
+        if (row.height <= 0 || row.top < viewport.top || row.bottom > viewport.bottom) return false
+      }
+      return true
+    }
     const DEFAULTS = Object.freeze({
       contentVisibility: true,
       aggressiveTurns: false,
@@ -34,24 +63,84 @@ window.__ModuleLoader__.load({
       smoothReveal: true,
       followTail: true,
       motion: true,
+      hoverIntent: true,
     })
-    /** DOM 节点 / JS 堆到达该阈值时自动降载。 */
+    /** DOM 节点到达该数量时自动降载。 */
     const HEAVY_DOM_NODES = 12000
-    const HEAVY_HEAP_BYTES = 1.1 * 1024 ** 3
+    /** 回合数到这个量级就自动开整回合离屏跳过（长任务卡顿的主要来源）。 */
+    const TURN_AUTO_THRESHOLD = 20
+    /** 用掉浏览器堆上限的这个比例即视为重负载。 */
+    const HEAP_BUDGET_RATIO = 0.7
+
+    /**
+     * 重负载阈值。
+     *
+     * 原来堆阈值写死 1.1GB，但浏览器实际堆上限随机器与会话变化
+     * （performance.memory.jsHeapSizeLimit），写死的数字要么过早降载、要么永远等不到。
+     * 能取到真实上限就按比例算，取不到再退回固定值。
+     *
+     * @returns {{ nodes: number, heap: number, limit: number }} 触发重负载的节点数、堆字节与堆上限。
+     */
+    function heavyBudget() {
+      const memory = typeof performance !== 'undefined' ? performance.memory : undefined
+      const limit = memory && typeof memory.jsHeapSizeLimit === 'number' ? memory.jsHeapSizeLimit : 0
+      return { nodes: HEAVY_DOM_NODES, heap: limit > 0 ? limit * HEAP_BUDGET_RATIO : 1.1 * 1024 ** 3, limit }
+    }
+
+    /** 当前对话里的回合数。 */
+    function countTurns() {
+      if (typeof document === 'undefined') return 0
+      return document.querySelectorAll('[data-chat-turn]').length
+    }
+
+    /**
+     * 用真实回合高度校准 contain-intrinsic-size。
+     *
+     * 整回合离屏跳过的占位高度如果是猜的（原来固定 360px），实际渲染高度差很多时浏览器会
+     * 反复校正滚动位置，看起来就是「滚动发飘、卡顿」。这里取若干个已渲染回合的平均高度
+     * 写进 CSS 变量，占位就准了。
+     */
+    function calibrateTurnSize() {
+      if (typeof document === 'undefined') return
+      const turns = document.querySelectorAll('[data-chat-turn]')
+      if (turns.length === 0) return
+      let sum = 0
+      let seen = 0
+      for (const turn of turns) {
+        const height = turn.offsetHeight
+        if (height > 40) {
+          sum += height
+          seen += 1
+        }
+        if (seen >= 6) break
+      }
+      if (seen === 0) return
+      const average = Math.round(Math.min(2000, Math.max(120, sum / seen)))
+      document.documentElement.style.setProperty('--dsh-pg-turn-size', average + 'px')
+    }
 
     /** 运行时自检状态：设置页展示，同时挂到 window 上方便排查。 */
     const runtime = {
       scroller: false,
-      pinned: true,
+      pinned: false,
+      nativeFollow: false,
       thinkSeen: 0,
       thinkOpened: 0,
       seatOpened: 0,
       follows: 0,
-      restores: 0,
-      lastFollowAt: 0,
     }
 
     const CSS = [
+      /*
+       * 悬停详情气泡（Tooltip 原语的 span[role="tooltip"]）。
+       * 它每次显示都是「挂载 - 测量 - 定位 - 卸载」，contain 把它的布局与绘制
+       * 限制在自身，避免把宿主列表一起卷进重排；will-change 让它独占合成层，
+       * 写 left/top 时不必重绘列表背景。
+       */
+      '[role="tooltip"] {',
+      '  contain: layout paint;',
+      '  will-change: transform;',
+      '}',
       /* 过程块与工具块：默认离屏跳过布局与绘制。 */
       '[data-perfguard-cv="on"] [data-step-process],',
       '[data-perfguard-cv="on"] [data-turn-process] {',
@@ -62,7 +151,7 @@ window.__ModuleLoader__.load({
       '[data-perfguard-turns="on"] [data-chat-turn],',
       '[data-perfguard-heavy] [data-chat-turn] {',
       '  content-visibility: auto;',
-      '  contain-intrinsic-size: auto 360px;',
+      '  contain-intrinsic-size: auto var(--dsh-pg-turn-size, 360px);',
       '}',
       /* 正在流式输出的回合不做离屏跳过，避免增量高度抖动的测量噪声。 */
       '[data-perfguard-turns="on"] [data-chat-turn][data-streaming],',
@@ -210,7 +299,8 @@ window.__ModuleLoader__.load({
       if (typeof document === 'undefined') return
       const root = document.documentElement
       root.dataset.perfguardCv = prefs.contentVisibility ? 'on' : 'off'
-      root.dataset.perfguardTurns = prefs.aggressiveTurns ? 'on' : 'off'
+      // 手动开启，或回合数已经很多（长任务必然卡）时自动开启。
+      root.dataset.perfguardTurns = prefs.aggressiveTurns || countTurns() >= TURN_AUTO_THRESHOLD ? 'on' : 'off'
       root.dataset.perfguardClamp = prefs.clampTools ? 'on' : 'off'
       root.dataset.perfguardReveal = prefs.smoothReveal ? 'on' : 'off'
       root.dataset.perfguardMotion = prefs.motion ? 'on' : 'off'
@@ -265,9 +355,17 @@ window.__ModuleLoader__.load({
           }
           return
         }
+        // 长会话：回合一多就自动开整回合离屏，并把占位高度校准到真实值。
+        const root2 = document.documentElement
+        const autoTurns = countTurns() >= TURN_AUTO_THRESHOLD
+        if (autoTurns && root2.dataset.perfguardTurns !== 'on') {
+          root2.dataset.perfguardTurns = 'on'
+          calibrateTurnSize()
+        }
+        const budget = heavyBudget()
         const nodes = document.getElementsByTagName('*').length
         const heap = performance.memory ? performance.memory.usedJSHeapSize : 0
-        const next = nodes > HEAVY_DOM_NODES || heap > HEAVY_HEAP_BYTES
+        const next = nodes > budget.nodes || heap > budget.heap
         if (next === heavy) return
         heavy = next
         if (heavy) root.setAttribute('data-perfguard-heavy', '')
@@ -312,7 +410,7 @@ window.__ModuleLoader__.load({
       const seen = new WeakSet()
 
       function clickOnce(element, button) {
-        if (button === null || button.getAttribute('aria-expanded') !== 'false') return false
+        if (button === null || opened.has(element) || button.getAttribute('aria-expanded') !== 'false' || !canAutoReveal(button)) return false
         opened.add(element)
         button.click()
         return true
@@ -332,29 +430,21 @@ window.__ModuleLoader__.load({
       }
 
       /**
-       * 过程组折叠时，思考行根本不在 DOM 里 —— 从「当前流式回合」反推：
-       * 页面存在 data-streaming 时，展开最后一个（= 最新的）过程组，让思考链露出来。
+       * 折叠组只由自己的运行态标题触发展开，不借用其他会话的流式标记。
        */
       function openLiveSeat() {
         if (!isEnabled()) return
         const now = Date.now()
         if (now - lastOpenAt < 800) return
-        // data-streaming 要等 assistant 文本出现；过程组头部的 TextShimmer 在开始思考时就有 data-shimmer。
-        if (document.querySelector('[data-streaming], [data-shimmer]') === null) return
-        let latest = null
-        let latestTurn = -1
-        for (const seat of document.querySelectorAll(SEAT_SELECTOR)) {
-          const raw = seat.getAttribute('data-chat-turn')
-          if (raw === null) continue
-          const turn = Number(raw)
-          if (!Number.isFinite(turn) || turn < latestTurn) continue
-          latest = seat
-          latestTurn = turn
+        for (const marker of document.querySelectorAll(SEAT_SELECTOR + ' [data-shimmer]')) {
+          const seat = marker.closest(SEAT_SELECTOR)
+          if (seat === null || USER_CLOSED.has(seat) || opened.has(seat)) continue
+          const button = toggleTarget(seat)
+          if (button === null || !button.contains(marker) || !clickOnce(seat, button)) continue
+          lastOpenAt = now
+          runtime.seatOpened += 1
+          break
         }
-        if (latest === null || USER_CLOSED.has(latest) || opened.has(latest)) return
-        if (toggleTarget(latest)?.getAttribute('aria-expanded') !== 'false') return
-        lastOpenAt = now
-        if (clickOnce(latest, toggleTarget(latest))) runtime.seatOpened += 1
       }
 
       function scan(root) {
@@ -377,7 +467,7 @@ window.__ModuleLoader__.load({
         childList: true,
         subtree: true,
         attributes: true,
-        attributeFilter: ['data-state'],
+        attributeFilter: ['data-state', 'data-shimmer', 'data-chat-following-tail'],
       })
 
       scan(document.documentElement)
@@ -390,14 +480,17 @@ window.__ModuleLoader__.load({
       const onClick = (event) => {
         const target = event.target
         if (!(target instanceof Element)) return
-        const button = target.closest('button[aria-expanded]')
+        const button = target.closest('[aria-expanded]')
         if (button === null) return
         // 点击时仍是展开态 = 这是收起动作，记下来别打扰用户。
         if (button.getAttribute('aria-expanded') !== 'true') return
         const think = target.closest(THINK_SELECTOR)
-        if (think !== null) USER_CLOSED.add(think)
+        if (think !== null && toggleTarget(think) === button) {
+          USER_CLOSED.add(think)
+          return
+        }
         const seat = target.closest(SEAT_SELECTOR)
-        if (seat !== null) USER_CLOSED.add(seat)
+        if (seat !== null && toggleTarget(seat) === button) USER_CLOSED.add(seat)
       }
       document.addEventListener('click', onClick, true)
 
@@ -408,222 +501,274 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /**
-     * 跟随最新输出：
-     *  - 贴底时，新内容到达后用 rAF 缓动追到最新一行（不是瞬移）；
-     *  - 一旦用户向上滚离底部（>64px）立刻脱离；
-     *  - 再滚回距底 24px 内自动恢复跟随。
-     */
-    /**
-     * 跟随最新输出（可注入环境，便于在 Node 里跑仿真）。
-     *
-     * 设计要点：
-     *  - 只有「贴底」才算跟随；判定用 scrollHeight - scrollTop - clientHeight <= 24。
-     *  - 解除跟随只认用户手势：滚轮向上、PageUp/↑/Home、按住滚动条拖动（pointerdown）。
-     *    内容重排 / 浏览器滚动锚定造成的回退不算。
-     *  - 只要用户正在操作（intent 窗口内），一律不写 scrollTop —— 避免"被拉回底部"。
-     *  - 跟随中若 App 自己脱离了跟随（它渲染「回到底部」按钮），点它一次让 App 状态机自愈。
-     */
+    /** 旧版 Chat 的平滑跟随；新版的滚动位置、历史锚点和回底按钮由宿主管理。 */
     function createFollowController(env) {
       const doc = env.document
       const win = env.window
-      const clock = env.performance
-      const scrollerSelector = env.scrollerSelector || '[data-conversation-scroll]'
       const isEnabled = env.isEnabled || (() => true)
-      const state = {
-        mode: 'follow',
-        intentUntil: 0,
-        pointerDown: false,
-        frame: 0,
-        attached: null,
-        /** 用 -Infinity 起步，否则时钟从 0 开始时会白白节流掉第一次。 */
-        lastRestoreAt: Number.NEGATIVE_INFINITY,
-        lastGap: 0,
-        lastTop: 0,
-        disabled: false,
-      }
+      const state = { mode: 'reading', native: false, attached: null }
+      // 切换会话可能短暂卸载 Chat；同一容器不能在过渡期回到旧版控制器。
+      const nativeOwners = new WeakSet()
+      let session = null
+      let frame = 0
+      let intentUntil = 0
+      let pointerDown = false
+      let lastTop = 0
+      let lastGap = 0
+      const sessionOf = (element) => element?.closest('[data-conversation-session]')?.getAttribute('data-conversation-session') ?? null
+      const intentActive = () => pointerDown || env.performance.now() < intentUntil
+      const markIntent = () => { intentUntil = env.performance.now() + 700 }
 
       function pickScroller() {
-        const list = doc.querySelectorAll(scrollerSelector)
         let best = null
-        for (const element of list) {
-          if (element.clientHeight <= 0) continue
-          if (best === null || element.clientHeight > best.clientHeight) best = element
+        for (const element of doc.querySelectorAll(SCROLL_SELECTOR)) {
+          if (element.clientHeight > (best?.clientHeight ?? 0)) best = element
         }
         return best
       }
 
-      function gapOf(element) {
-        return element.scrollHeight - element.scrollTop - element.clientHeight
+      function cancelFrame() {
+        if (frame !== 0) win.cancelAnimationFrame(frame)
+        frame = 0
       }
 
-      function now() {
-        return clock.now()
+      function setMode(mode) {
+        if (mode === 'reading') cancelFrame()
+        if (state.mode === mode) return
+        state.mode = mode
+        env.onState?.(mode)
       }
 
-      function intentActive() {
-        return state.pointerDown || now() < state.intentUntil
-      }
-
-      function markIntent() {
-        state.intentUntil = now() + 700
-      }
-
-      /** 用户明确的向上手势：立刻转为阅读模式，且不再由我们来滚。 */
-      function markReading() {
-        if (state.mode === 'reading') return
-        state.mode = 'reading'
-        if (env.onState) env.onState(state.mode)
-      }
-
-      function markFollow() {
-        // 回到贴底：立刻清掉手势窗口，否则刚滚回底部还要再等 700ms 才恢复跟随。
-        state.intentUntil = 0
-        if (state.mode === 'follow') return
-        state.mode = 'follow'
-        if (env.onState) env.onState(state.mode)
-      }
-
-      function restoreAppFollow() {
-        if (state.mode !== 'follow') return
-        if (now() - state.lastRestoreAt < 900) return
-        const button = doc.querySelector('[class*="toBottomSlot"] button')
-        if (button === null || button === undefined) return
-        state.lastRestoreAt = now()
-        if (env.onRestore) env.onRestore()
-        if (typeof button.click === 'function') button.click()
+      function mayWrite() {
+        const element = state.attached
+        return element !== null && !state.native && state.mode === 'follow' && !intentActive()
+          && element.isConnected && isEnabled() && sessionOf(element) === session
       }
 
       function step() {
-        state.frame = 0
-        if (state.disabled || !isEnabled()) return
-        if (state.mode !== 'follow' || intentActive()) return
-        const element = state.attached || pickScroller()
-        if (element === null) return
-        const gap = gapOf(element)
+        frame = 0
+        if (!mayWrite()) return
+        const element = state.attached
+        // 原生 Chat 可能先于下一次挂载检查出现。
+        if (nativeChatMarker(element) !== null) {
+          nativeOwners.add(element)
+          attach()
+          return
+        }
+        if (element.clientHeight <= 0) return
+        const gap = bottomGap(element)
         if (gap <= 1) return
-        element.scrollTop = element.scrollTop + Math.max(1, gap * 0.45)
-        state.frame = win.requestAnimationFrame(step)
-      }
-
-      /** 内容变化时调用：跟随模式下请求一次追底。 */
-      function follow() {
-        if (state.disabled || !isEnabled()) return
-        if (state.mode !== 'follow' || intentActive()) return
-        restoreAppFollow()
-        if (state.frame !== 0) return
-        state.frame = win.requestAnimationFrame(step)
+        element.scrollTop += Math.max(1, gap * 0.45)
+        env.onFollow?.()
+        frame = win.requestAnimationFrame(step)
       }
 
       function onScroll(event) {
-        const element = event.target
-        if (!element || element !== state.attached) return
-        const gap = gapOf(element)
-        const movedUp = element.scrollTop < state.lastTop - 2
-        state.lastTop = element.scrollTop
-        state.lastGap = gap
-        if (gap <= 24) {
-          markFollow()
-          return
+        const element = state.attached
+        if (element === null || event.target !== element || state.native) return
+        const top = element.scrollTop
+        const gap = bottomGap(element)
+        const delta = top - lastTop
+        const sameFloor = Math.abs(top + gap - lastTop - lastGap) < 1
+        // Native scrollbar dragging does not always emit a pointer event.
+        if (delta < -0.5 && (intentActive() || sameFloor)) setMode('reading')
+        // 只在实际向下回底时恢复，不把小幅上滚或布局缩短当成回底。
+        else if (delta > 0.5 && gap <= 1) {
+          intentUntil = 0
+          setMode('follow')
         }
-        if (state.mode !== 'follow') return
-        // 只认「有手势的上移」。布局锚定同样会让 scrollTop 变小，但它没有手势。
-        if (movedUp && intentActive()) markReading()
+        lastTop = top
+        lastGap = gap
+      }
+
+      function inTranscript(event) {
+        const target = event.target
+        return !state.native && state.attached !== null && target?.closest?.(SCROLL_SELECTOR) === state.attached
+          && !target.closest('[data-composer-seat], input, textarea, select, [contenteditable="true"]')
       }
 
       function onWheel(event) {
-        if (state.disabled) return
+        if (!inTranscript(event) || event.ctrlKey || event.deltaY === 0) return
         markIntent()
-        if (event.deltaY < 0) markReading()
+        const nested = event.target.closest('[data-step-process-body], [data-turn-process-body], pre')
+        if (event.deltaY < 0 && !(nested && nested.scrollHeight > nested.clientHeight)) setMode('reading')
       }
 
       function onPointerDown(event) {
-        if (state.disabled) return
-        if (!event.target) return
-        state.pointerDown = true
+        if (!inTranscript(event)) return
+        pointerDown = true
         markIntent()
       }
 
-      function onPointerUp() {
-        state.pointerDown = false
-      }
+      function onPointerUp() { pointerDown = false }
+      function onTouchStart(event) { if (inTranscript(event)) markIntent() }
 
       function onKeyDown(event) {
-        if (event.key !== 'PageUp' && event.key !== 'ArrowUp' && event.key !== 'Home') return
+        if (!inTranscript(event)) return
+        if (!['PageUp', 'ArrowUp', 'Home'].includes(event.key) && !(event.shiftKey && event.key === ' ')) return
         markIntent()
-        markReading()
+        setMode('reading')
       }
 
       const observer = new env.MutationObserver(() => {
-        follow()
+        if (frame === 0 && mayWrite()) frame = win.requestAnimationFrame(step)
       })
 
       function attach() {
         const element = pickScroller()
-        if (element === null) return
-        if (element !== state.attached) {
-          if (state.attached !== null) observer.disconnect()
-          state.attached = element
-          state.lastTop = element.scrollTop
-          state.lastGap = gapOf(element)
-          state.mode = gapOf(element) <= 24 ? 'follow' : 'reading'
-          observer.observe(element, { childList: true, subtree: true, characterData: true })
-        }
+        if (element !== null && !nativeOwners.has(element) && nativeChatMarker(element) !== null) nativeOwners.add(element)
+        const native = element !== null && nativeOwners.has(element)
+        const nextSession = sessionOf(element)
+        if (element === state.attached && native === state.native && nextSession === session) return
+        cancelFrame()
+        observer.disconnect()
+        state.attached = element
+        state.native = native
+        session = nextSession
+        pointerDown = false
+        intentUntil = 0
+        lastTop = element?.scrollTop ?? 0
+        lastGap = element === null ? 0 : bottomGap(element)
+        setMode(element !== null && !native && lastGap <= 1 ? 'follow' : 'reading')
+        if (element !== null && !native) observer.observe(element, { childList: true, subtree: true, characterData: true })
+        env.onAttachment?.(element, native)
       }
 
       function start() {
+        const events = {
+          scroll: onScroll, wheel: onWheel, keydown: onKeyDown, touchstart: onTouchStart,
+          pointerdown: onPointerDown, pointerup: onPointerUp, pointercancel: onPointerUp,
+        }
         attach()
         const timer = win.setInterval(attach, 1500)
-        doc.addEventListener('scroll', onScroll, { capture: true, passive: true })
-        doc.addEventListener('wheel', onWheel, { capture: true, passive: true })
-        doc.addEventListener('pointerdown', onPointerDown, { capture: true, passive: true })
-        doc.addEventListener('pointerup', onPointerUp, { capture: true, passive: true })
-        doc.addEventListener('keydown', onKeyDown, { capture: true })
+        for (const [name, fn] of Object.entries(events)) doc.addEventListener(name, fn, { capture: true, passive: true })
+        win.addEventListener?.('blur', onPointerUp)
         return () => {
-          state.disabled = true
-          observer.disconnect()
+          win.removeEventListener?.('blur', onPointerUp)
+          for (const [name, fn] of Object.entries(events)) doc.removeEventListener(name, fn, true)
           win.clearInterval(timer)
-          win.cancelAnimationFrame(state.frame)
-          doc.removeEventListener('scroll', onScroll, { capture: true })
-          doc.removeEventListener('wheel', onWheel, { capture: true })
-          doc.removeEventListener('pointerdown', onPointerDown, { capture: true })
-          doc.removeEventListener('pointerup', onPointerUp, { capture: true })
-          doc.removeEventListener('keydown', onKeyDown, { capture: true })
+          observer.disconnect()
+          cancelFrame()
+          state.attached = null
+          state.native = false
+          setMode('reading')
+          env.onAttachment?.(null, false)
         }
       }
 
-      return {
-        start,
-        state,
-        /** 仅供测试：模拟一次内容增长后的回调。 */
-        __follow: follow,
-        __scroll: onScroll,
-      }
+      return { start, state }
     }
 
     function installFollowTail(isEnabled) {
-      const controller = createFollowController({
-        document,
-        window,
-        performance,
-        MutationObserver,
-        scrollerSelector: SCROLL_SELECTOR,
-        isEnabled,
-        onState: (mode) => {
-          runtime.pinned = mode === 'follow'
+      return createFollowController({
+        document, window, performance, MutationObserver, isEnabled,
+        onState: (mode) => { runtime.pinned = mode === 'follow' },
+        onAttachment: (element, native) => {
+          runtime.scroller = element !== null
+          runtime.nativeFollow = native
         },
-        onRestore: () => {
-          runtime.restores += 1
-        },
-      })
-      const stop = controller.start()
-      runtime.scroller = controller.state.attached !== null
-      return () => {
-        stop()
-      }
+        onFollow: () => { runtime.follows += 1 },
+      }).start()
     }
 
     /** 中键关闭标签页（dockkit 标签 chip 上的 [data-dockkit-tab-close]）。 */
+    /**
+     * 侧边栏会话行的「悬停详情」防抖（hover intent）。
+     *
+     * 会话行用的是 Tooltip 原语，`delayMs` 默认 0：指针一进入行就
+     * 1) `el.getBoundingClientRect()` —— 强制同步布局；
+     * 2) 挂载气泡（ResizeObserver + 定位 effect，写 left/top 触发二次布局）；
+     * 3) 指针离开时整棵卸载。
+     * 快速扫过列表时每一行都要走一遍，滑动就掉帧。
+     *
+     * 做法：在 `[role="tree"]`（会话列表）范围内，把「指针还在移动」期间的
+     * pointerover / pointerout 拦下来（阻止到达 React 的委托监听），指针静止
+     * HOVER_INTENT_MS 之后补发一次成对的 out/over —— 详情卡片就在停稳后出现，
+     * 这正是 Tooltip 本该有的 delayMs 语义。
+     *
+     * 按住鼠标键时一律放行：gutter 多选、拖拽都依赖 pointerenter。
+     *
+     * @param {() => boolean} isEnabled 开关。
+     * @returns {() => void} 卸载函数。
+     */
+    function installHoverIntent(isEnabled) {
+      const QUIET_MS = 140
+      let lastMoveAt = 0
+      let activeEl = null
+      let pendingEl = null
+      let timer = 0
+      let replaying = false
+
+      const inTree = (node) => node instanceof Element && node.closest('[role="tree"]') !== null
+
+      /** 指针停稳后，把 final 状态一次性补发给 React。 */
+      const settle = () => {
+        timer = 0
+        const target = pendingEl
+        pendingEl = null
+        if (Date.now() - lastMoveAt < QUIET_MS) {
+          schedule()
+          return
+        }
+        const want = target !== null && target.isConnected === true && target.matches(':hover') ? target : null
+        if (want === activeEl) return
+        replaying = true
+        try {
+          if (activeEl !== null && activeEl.isConnected === true) {
+            activeEl.dispatchEvent(new PointerEvent('pointerout', { bubbles: true, relatedTarget: want }))
+            activeEl.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: want }))
+          }
+          if (want !== null) {
+            want.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, relatedTarget: activeEl }))
+            want.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: activeEl }))
+          }
+          activeEl = want
+        } finally {
+          replaying = false
+        }
+      }
+
+      const schedule = () => {
+        if (timer !== 0) return
+        const wait = Math.max(16, QUIET_MS - (Date.now() - lastMoveAt))
+        timer = window.setTimeout(settle, wait)
+      }
+
+      const onPointerMove = (event) => {
+        lastMoveAt = event.timeStamp
+      }
+      const onOver = (event) => {
+        if (replaying || !isEnabled()) return
+        if (event.buttons !== 0) {
+          activeEl = event.target
+          return
+        }
+        if (!inTree(event.target)) return
+        pendingEl = event.target
+        event.stopImmediatePropagation()
+        schedule()
+      }
+      const onOut = (event) => {
+        if (replaying || !isEnabled()) return
+        if (event.buttons !== 0) return
+        if (!inTree(event.target)) return
+        pendingEl = null
+        event.stopImmediatePropagation()
+        schedule()
+      }
+
+      document.addEventListener('pointermove', onPointerMove, true)
+      document.addEventListener('pointerover', onOver, true)
+      document.addEventListener('pointerout', onOut, true)
+      return () => {
+        if (timer !== 0) window.clearTimeout(timer)
+        timer = 0
+        document.removeEventListener('pointermove', onPointerMove, true)
+        document.removeEventListener('pointerover', onOver, true)
+        document.removeEventListener('pointerout', onOut, true)
+      }
+    }
+
     function installMiddleClickClose() {
       const onAuxClick = (event) => {
         if (event.button !== 1) return
@@ -705,12 +850,19 @@ window.__ModuleLoader__.load({
     }
 
     function Switch(props) {
+      // disabled：永久性错误这类「开关了也没用」的行需要用禁用态表达，
+      // 否则用户会以为打开了却没生效。
+      const disabled = props.disabled === true
       return h('button', {
         type: 'button',
         className: 'dsh-pg-switch',
         'data-on': String(props.on),
         'aria-pressed': props.on ? 'true' : 'false',
-        onClick: props.onToggle,
+        'aria-disabled': disabled ? 'true' : 'false',
+        disabled,
+        title: disabled ? '永久性错误重试不可能成功，已禁止' : undefined,
+        style: disabled ? { opacity: 0.4, cursor: 'not-allowed' } : undefined,
+        onClick: disabled ? undefined : props.onToggle,
       })
     }
 
@@ -751,13 +903,14 @@ window.__ModuleLoader__.load({
         applyPrefs(next)
       }
 
+      const nativeFollow = runtime.nativeFollow
       const GROUPS = [
         {
           title: '思考链与跟随',
-          hint: '流式输出时的阅读体验：思考链自动展开、贴底跟随、回到底部自动续跟。',
+          hint: '流式输出期间的阅读偏好。',
           rows: [
-            ['autoExpandThinking', '自动展开思考链', '模型思考时自动展开正在流式输出的思考行（含外层过程组）：只处理当前正在跑的步骤，历史步骤保持折叠；手动收起过的行不再自动打开。'],
-            ['followTail', '跟随最新输出', '贴底时，新内容到达后用缓动追到最新一行；向上滚动立即脱离跟随，滚回距底部 24px 内自动恢复。'],
+            ['autoExpandThinking', '自动展开思考链', '仅在贴底时展开正在运行的思考行和可见过程组。'],
+            ['followTail', nativeFollow ? '跟随最新输出' : '旧版兼容跟随', null],
             ['smoothReveal', '展开平滑动画', '思考链与过程组展开时淡入并轻微上移；系统开启「减少动态效果」时自动取消动画。'],
           ],
         },
@@ -775,6 +928,7 @@ window.__ModuleLoader__.load({
             ['aggressiveTurns', '整回合离屏跳过（实验）', '把离屏跳过提升到整条回合。长会话收益最大；若滚动位置偶尔跳动，关掉这一项即可。'],
             ['clampTools', '工具输出限高', '把超长的终端输出、diff、过程体限制在几百像素内并内部滚动，避免单条消息撑出几万像素。'],
             ['scrollGovernor', '滚动期间降载', '滚动时暂停动画与毛玻璃合成，停止滚动 140ms 后恢复，减少掉帧。'],
+            ['hoverIntent', '悬停详情防抖', '会话列表里快速扫过时不再逐行弹出详情卡片：指针停稳 140ms 才显示。详情卡片的每次弹出都要强制同步布局并挂载气泡，扫过十几行就是十几次布局抖动。'],
             ['autoDegrade', '自动降载', 'DOM 节点超过 12000 或 JS 堆超过 1.1GB 时自动提醒并开启保守项。'],
           ],
         },
@@ -829,8 +983,10 @@ window.__ModuleLoader__.load({
               h(
                 'div',
                 { className: 'dsh-pg-row', key },
-                h('div', { className: 'dsh-pg-row-main' }, h('b', null, title), h('span', null, desc)),
-                h(Switch, { on: Boolean(prefs[key]), onToggle: () => toggle(key) }),
+                h('div', { className: 'dsh-pg-row-main' }, h('b', null, title), desc && h('span', null, desc)),
+                key === 'followTail' && nativeFollow
+                  ? h('span', { style: { flexShrink: 0 } }, '由 DSH 管理')
+                  : h(Switch, { on: Boolean(prefs[key]), onToggle: () => toggle(key) }),
               ),
             ),
           ),
@@ -870,42 +1026,44 @@ window.__ModuleLoader__.load({
                     'div',
                     { className: 'dsh-pg-row-main' },
                     h('b', null, '最大重试次数'),
-                    h('span', null, retry.maxRetries < 0 ? '当前不设上限：失败会一直重试，遇到持续故障可能长时间卡住，可随时关掉右侧开关。' : '0 表示不自动重试；指数退避 0.8s 起，429 优先用 Retry-After。'),
+                    h('span', null, '0 表示不自动重试；指数退避 0.8s 起，429 优先用 Retry-After。上限 8 次 —— 每次重试都要重建完整请求与流，次数放大是内存溢出崩溃的主因。'),
                   ),
                   h(
                     'div',
                     { className: 'dsh-pg-actions' },
-                    h('span', { className: 'dsh-pg-desc' }, '不限'),
-                    h(Switch, {
-                      on: retry.maxRetries < 0,
-                      onToggle: () => saveRetry({ ...retry, maxRetries: retry.maxRetries < 0 ? 3 : -1 }),
-                    }),
                     h('input', {
                       className: 'dsh-pg-input',
                       type: 'number',
                       min: 0,
-                      max: 50,
-                      disabled: retry.maxRetries < 0,
-                      value: retry.maxRetries < 0 ? '' : retry.maxRetries,
+                      max: 8,
+                      value: retry.maxRetries < 0 ? 8 : retry.maxRetries,
                       onChange: (event) => {
                         const parsed = Number(event.target.value)
-                        const value = Number.isFinite(parsed) ? Math.max(0, Math.min(50, Math.round(parsed))) : 0
+                        // 0..8 硬边界：旧配置里的 -1（曾经表示「不限」）在这里被收敛成 8
+                        const value = Number.isFinite(parsed) ? Math.max(0, Math.min(8, Math.round(parsed))) : 0
                         saveRetry({ ...retry, maxRetries: value })
                       },
                     }),
                   ),
                 ),
-                ...Object.entries({ '400': '参数错误', '401': '鉴权失败', '402': '余额不足', '403': '无权限', '429': '限流', '502': '网关错误', '503': '服务不可用' }).map(([status, label]) =>
-                  h(
+                ...Object.entries({ '400': '参数错误', '401': '鉴权失败', '402': '余额不足', '403': '无权限', '429': '限流', '502': '网关错误', '503': '服务不可用' }).map(([status, label]) => {
+                  // 永久性错误重试永远不会成功，只会把内存与回合预算耗光，因此不给开关。
+                  const permanent = ['400', '401', '402', '403'].includes(status)
+                  return h(
                     'div',
                     { className: 'dsh-pg-row', key: 'status-' + status },
-                    h('div', { className: 'dsh-pg-row-main' }, h('b', null, 'HTTP ' + status + ' · ' + label), h('span', null, retry.statuses[status] ? '失败后自动重试（未输出内容时）' : '只记录日志，不自动重试')),
+                    h('div', { className: 'dsh-pg-row-main' },
+                      h('b', null, 'HTTP ' + status + ' · ' + label),
+                      h('span', null, permanent
+                        ? '永久性错误：重试不可能成功，已禁止自动重试（只记录日志）'
+                        : retry.statuses[status] ? '失败后自动重试（未输出内容时）' : '只记录日志，不自动重试')),
                     h(Switch, {
-                      on: retry.statuses[status] === true,
-                      onToggle: () => saveRetry({ ...retry, statuses: { ...retry.statuses, [status]: retry.statuses[status] !== true } }),
+                      on: permanent ? false : retry.statuses[status] === true,
+                      disabled: permanent,
+                      onToggle: () => { if (!permanent) saveRetry({ ...retry, statuses: { ...retry.statuses, [status]: retry.statuses[status] !== true } }) },
                     }),
-                  ),
-                ),
+                  )
+                }),
                 errors.length > 0
                   ? h(
                       'div',
@@ -923,16 +1081,49 @@ window.__ModuleLoader__.load({
         h(
           'section',
           { className: 'dsh-pg-group' },
+          h('div', { className: 'dsh-pg-group-title' }, '输出清理'),
+          h('div', { className: 'dsh-pg-group-hint' }, '有些渠道不走 reasoning 通道，而是把思维链当正文吐出来（例如 <thinking>…</thinking>）。开启后在收流阶段就摘掉，不写进消息、不占上下文。'),
+          h(
+            'div',
+            { className: 'dsh-pg-row' },
+            h(
+              'div',
+              { className: 'dsh-pg-row-main' },
+              h('b', null, '处理正文里的思维链'),
+              h('span', null, '识别 <thinking> / <thought> / <reasoning> 三种标签；跨 chunk 被切断的标签也能识别。关掉则原样打印。'),
+            ),
+            h(Switch, {
+              on: retry === null ? true : retry.thinkingMode !== 'off',
+              onToggle: () => saveRetry({ ...retry, thinkingMode: retry?.thinkingMode === 'off' ? 'keep' : 'off' }),
+            }),
+          ),
+          h(
+            'div',
+            { className: 'dsh-pg-row' },
+            h(
+              'div',
+              { className: 'dsh-pg-row-main' },
+              h('b', null, '保留为可折叠思考'),
+              h('span', null, '开启：改写成 reasoning 块，内容保留、按思考行折叠显示；关闭：整段丢弃，不写进消息。'),
+            ),
+            h(Switch, {
+              on: retry === null ? true : (retry.thinkingMode ?? 'keep') !== 'strip',
+              onToggle: () => saveRetry({ ...retry, thinkingMode: (retry?.thinkingMode ?? 'keep') === 'strip' ? 'keep' : 'strip' }),
+            }),
+          ),
+        ),
+        h(
+          'section',
+          { className: 'dsh-pg-group' },
           h('div', { className: 'dsh-pg-group-title' }, '自检'),
           h('div', { className: 'dsh-pg-group-hint' }, '跟随或展开没生效时先看这里；也可以在 DevTools 里执行 window.__dshPerfGuard 查看实时状态。'),
           h(
             'div',
             { className: 'dsh-pg-grid' },
             h('div', { className: 'dsh-pg-card' }, h('em', null, '滚动容器'), h('strong', null, runtime.scroller ? '已连接' : '未找到')),
-            h('div', { className: 'dsh-pg-card' }, h('em', null, '跟随状态'), h('strong', null, runtime.pinned ? '贴底跟随中' : '已脱离')),
+            h('div', { className: 'dsh-pg-card' }, h('em', null, '跟随控制'), h('strong', null, !runtime.scroller ? '未检测到' : runtime.nativeFollow ? 'DSH 原生' : !prefs.followTail ? '已关闭' : runtime.pinned ? '兼容跟随' : '阅读中')),
             h('div', { className: 'dsh-pg-card' }, h('em', null, '思考行 发现/展开'), h('strong', null, runtime.thinkSeen + ' / ' + runtime.thinkOpened)),
-            h('div', { className: 'dsh-pg-card' }, h('em', null, '距底部'), h('strong', null, runtime.gap === undefined ? '-' : runtime.gap + ' px')),
-            h('div', { className: 'dsh-pg-card' }, h('em', null, '跟随次数 / 重挂跟随'), h('strong', null, runtime.follows + ' / ' + runtime.restores)),
+            !runtime.nativeFollow && h('div', { className: 'dsh-pg-card' }, h('em', null, '兼容跟随帧数'), h('strong', null, String(runtime.follows))),
           ),
         ),
         sessions && sessions.largest.length > 0
@@ -975,6 +1166,7 @@ window.__ModuleLoader__.load({
       ctx.effect(() => installFollowTail(() => readPrefs().followTail))
       ctx.effect(() => installMotion(() => readPrefs().motion))
       ctx.effect(() => installMiddleClickClose())
+      ctx.effect(() => installHoverIntent(() => readPrefs().hoverIntent))
 
       ctx.slots.inject('settings.section', () =>
         ctx.slots.register(
@@ -993,8 +1185,8 @@ window.__ModuleLoader__.load({
 
     exports.apply = apply
     exports.inject = ['slots']
-    /** 仅供测试：跟随控制器在假 DOM 上跑仿真。 */
-    exports.__internals = { createFollowController }
+    /** 仅供客户端回归测试。 */
+    exports.__internals = { createFollowController, canAutoReveal, installHoverIntent }
 
     return module.exports
   },

@@ -1,19 +1,24 @@
 {
   "name": "dsh-perf-guard",
-  "version": "1.1.1",
-  "description": "DSH 长会话优化插件：贴底跟随、思考链自动展开、截断/传输失败自动重试、待办常驻面板、离屏渲染降载。",
+  "version": "1.9.1",
+  "description": "DSH 长会话优化插件：限制冷会话缓存、原生滚动兼容、思考链自动展开与错误恢复。",
   "type": "module",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
+    "./icon": "./icon.svg",
+    "./locale/*.json": "./locale/*.json",
     "./package.json": "./package.json"
   },
   "files": [
     "index.js",
     "client.js",
     "cordis.patch.yml",
+    "session-cache.patch.yml",
     "assets/",
+    "icon.svg",
+    "locale/",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
@@ -26,7 +31,6 @@
     "performance",
     "transcript",
     "scroll",
-    "todo",
     "retry"
   ],
   "license": "MIT",
@@ -40,16 +44,16 @@
     "url": "https://github.com/TaoLe-si/dsh-perf-guard/issues"
   },
   "scripts": {
-    "test": "node --test test/host-smoke.mjs test/follow-sim.mjs && node test/client-smoke.mjs",
+    "test": "node --test test/host-smoke.mjs test/host-contract.mjs test/follow-sim.mjs test/hover-intent.mjs && node test/client-smoke.mjs",
     "check": "node --check index.js && node --check client.js"
   },
   "engines": {
     "node": ">=20",
-    "dsh": ">=0.2.1-rc.4"
+    "dsh": ">=0.2.1-rc.4 || >=0.2.2-rc.1"
   },
   "dsh": {
     "displayName": "性能守卫",
-    "description": "长会话滚动降载、贴底跟随、截断重试、待办常驻",
+    "description": "长会话渲染降载、原生滚动兼容、有限重试与本地诊断",
     "bundle": {
       "patch": "./cordis.patch.yml"
     },

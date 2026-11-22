@@ -1,117 +1,69 @@
-# dsh-perf-guard
+# 性能守卫 · dsh-perf-guard
 
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的长会话插件。减少长对话在滚动和渲染时的开销，并给临时模型请求失败提供有上限的重试。
 
-只改行为，**不改任何主题、配色或布局**。
-
-## 功能
-
-### 1. 自动跟随（默认开）
-
-- 贴底时，新内容到达后用 rAF 缓动追到最新一行（每帧逼近 45%），不是瞬移。
-- 向上滚动（滚轮 / PageUp↑ / 拖动滚动条）立即脱离；内容重排、浏览器滚动锚定**不会**被误判成用户上滚。
-- 回到底部 24px 内自动恢复跟随。
-- 跟随中若宿主自己已脱离（渲染了「回到底部」按钮），点它一次让宿主的 `followingTail` 状态机自愈，节流 900ms。
-- 阅读态（非贴底）**绝不**写 `scrollTop`，也不会点「回到底部」。
-
-### 2. 思考链自动展开（默认开）
-
-- 只展开正在流式输出的思考行（`[data-variant="think"][data-state="running"]`）。
-- 过程组折叠时思考行不在 DOM 里：先用 `[data-streaming] / [data-shimmer]` 判断"正在输出"，再展开最新的过程组。
-- 历史回合保持折叠；用户手动收起过的行记入 `WeakSet`，不再自动打开。
-
-### 3. 截断 / 传输失败重试（默认开，可配）
-
-| 类别 | 识别方式 | 默认 |
-| --- | --- | --- |
-| HTTP 400 / 401 / 402 / 403 | `LlmError.status` 或消息前缀 | 只记日志 |
-| HTTP 429 / 502 / 503 | 同上 | 重试 |
-| HTTP 500 / 504 | 同上（需在设置里打开） | 重试 |
-| `TRANSPORT` / `STREAM_*` / `TIMEOUT` / `ETIMEDOUT` | 错误码或消息（含 `Request timed out.`、`stream idle timeout`） | 重试 |
-| 上游空转 | 强信号「没有产出 / 空响应 / no output / empty completion」；弱信号「稍后重试」须同时出现 上游/网关/中转/超时 语境 | 重试 |
-| 账号池繁忙 | `账号池` / `号池` / `繁忙` / `排队` / `overloaded` / `too many requests`（瞬时拥塞） | 重试 |
-| 上游输出中断 | 回合级错误（`上游输出中断`、`中断，请重试`）：`agent/request-error` 返回 `{ kind: 'retry' }` | 重试 |
-| 静默截断 | 流结束但没有 `finish` chunk | 重试 |
-| 长度截断 | `finish.reason.stopReason` 命中 `length/max_tokens/max_output` | 重试并记录 |
-
-- 上限 0–50，或**不限**（`maxRetries = -1`）。
-- HTTP 状态类默认只在**本轮尚未输出内容**时重试。例外：网关类 `500/502/503/504` 若在**流到一半**时返回
-  （Cloudflare 就是这样把 502 塞进流里的），在「截断 / 传输中断重试」开关打开时也允许重试，
-  因为半截输出没有价值。⚠️ 已交付给调用方的增量**收不回来**，所以重试后正文可能先出现
-  被中断的半截、再接完整内容；不想这样就把该开关关掉。429 与 4xx 保持"已输出后不重试"。
-- `ABORTED` / `CANCELLED`（用户取消）永不重试；429 优先 `Retry-After`，其余指数退避（0.8s 起，封顶 15s）。
-- 服务端在正文里给出的等待提示（`"retry_after":60`、`Retry-After: 5`）也会被读出来参与退避，
-  但仍受 15s/30s 封顶约束——所以 Cloudflare 要求的 60s 实际会压到 30s。
-- ⚠️ 长度截断重试通常仍会截断，根治是把该模型的 `maxTokens` 调大。
-- 上游空转（如中转回 `上游 95 秒内没有产出，请稍后重试`）整轮零内容落地，重试不会产生重复输出；
-  它受「截断 / 传输中断重试」开关控制。判定分两级，避免把 `余额不足，请稍后重试` 这类欠费错误也拉进重试：
-  「没产出 / 空响应」本身即充分，「稍后重试」只有在同一句里出现上游/网关/超时语境时才成立。
-  ⚠️ 若同时开了「不限」重试，而上游持续不产出，会持续重试下去（退避封顶 15s）。
-
-### 5. 长会话降载（默认开）
-
-- 离屏过程块 `content-visibility: auto`（整回合版本为实验项，默认关）。
-- 工具输出限高并内部滚动。
-- 滚动期间暂停动画与毛玻璃合成，停手 140ms 恢复。
-- DOM > 12000 节点或 JS 堆 > 1.1GB 时自动切保守模式。
+Perf Guard for DSH reduces transcript rendering work, respects native scrolling in newer Chat versions, and adds bounded retries and local diagnostics. It does not delete sessions or stop agents.
 
 ## 安装
 
-```bash
-# 从 GitHub 安装（无需发 npm）
-dsh plugin --profile desktop add github:TaoLe-si/dsh-perf-guard
+在 DSH 的插件管理界面添加下面的 GitHub 来源。使用 CLI 时，将 `desktop` 换成实际 profile 名；Web 通常为 `web`。
 
-# 本地开发
-dsh plugin --profile desktop add link:/absolute/path/to/dsh-perf-guard
+```sh
+dsh plugin --profile desktop add github:TaoLe-si/dsh-perf-guard#v1.9.1
 ```
 
-手动安装：
+也可从 [GitHub Releases](https://github.com/TaoLe-si/dsh-perf-guard/releases) 获取固定版本的安装包。不需要 npm 账号或额外构建步骤。不要在同一个 profile 中同时使用 Bundle 安装和手工插入插件行。
 
-```yaml
-# <profile>/cordis.patch.yml 末尾
-- insert:
-    - id: perf-guard
-      name: dsh-perf-guard
-```
+安装或升级后，打开 **设置 → 性能守卫**。更新已加载的宿主代码时，先等正在运行的工作结束，再重启 DSH；浏览器端刷新页面。如果面板仍显示旧版本，检查当前 profile 的插件来源。
 
-宿主半热重载；浏览器半需要刷新一次界面（Ctrl+R）。
+## 能做什么
 
-## 设置
-
-**设置 → 性能守卫**（`settings.section`，id `perf-guard`）：思考链与跟随、错误与重试（含状态码开关与「不限」）、自检（滚动容器/跟随状态/思考行计数/距底部）、会话日志体积排行。
-
-开关存 `localStorage['dsh-perf-guard:prefs']`；重试配置存 `~/.dsh/perf-guard.retry.json`。
-
-## 宿主接口
-
-| 路径 | 说明 |
+| 场景 | 行为 |
 | --- | --- |
-| `GET /api/perf-guard/health` | 版本探活 |
-| `GET /api/perf-guard/stats` | 宿主内存、会话日志排行、重试配置、最近错误 |
-| `GET/POST /api/perf-guard/retry` | 读取/更新重试配置 |
+| 流式输出时查看历史 | 新版 Chat 由 DSH 管理滚动和「回到底部」，插件不会替你点按钮。旧版在贴底时平滑跟随，小幅上滚即暂停，实际回底后再继续。 |
+| 查看运行中的过程 | 只在所在对话贴底时自动展开运行中的思考行和可见过程组，避免把不可见的标题带入视野或抢走输入焦点。 |
+| 长会话卡顿 | 跳过部分离屏过程的渲染、限制过长工具输出的展示高度、滚动时暂缓动画与滤镜。整回合降载可能影响布局测量。 |
+| 临时模型请求失败 | 默认对 HTTP `429`、`502`、`503` 以及部分传输中断、超时或空响应重试。默认让 DSH 原生重试先决，不把拒答、鉴权失败或取消视为网络故障。 |
+| 子代理路由被拒绝 | 保留失败结果和权限判断，补充可操作的恢复提示。不自动重试或替换显式指定的模型。 |
+| 排查本机内存 | 设置页显示渲染和宿主的采样数据；宿主统计区分仍挂载的空闲 Agent 与运行中的 Agent，不打开冷历史。 |
 
-除 `/assets/*` 外均要求 `x-dsh-plugin: perf-guard` 头。
+### 冷会话缓存（可选）
 
-## 兼容性
+在 DSH `0.2.2-rc.5` 中，历史查询默认最多保留 5 份可复用的冷会话准备缓存。要减少这部分驻留内存，可在当前 profile 的 `session-query-sqlite` 条目中**保留其他配置，只增设** `preparedSessionCacheSize: 1`，然后重启。参考 [Web 默认配置示例](session-cache.patch.yml)；不要用它覆盖自定义索引路径、搜索开关或其他配置。插件常规安装不会改写该条目。
 
-- 基线 `engines.dsh: ">=0.2.1-rc.4"`；低于基线的内核会被 DSH 直接禁用，无法挂载。
-- DOM 契约来自 `@deepseek-ai/dsh-client-ui-chat@0.2.1-rc.4`，大版本升级需复核选择器。
+正在使用的历史读引用不会被淘汰。再次打开已淘汰的历史时，DSH 会从持久化记录重新准备，可能稍慢。这不会卸载已经挂载的空闲 Agent，也不会清理后台任务、删除会话或者改动输出文件。限额是缓存份数，不是 RSS 或堆用量保证。
 
-## 测试
+### 重试和输出
 
-```bash
+- 设置页可调整重试次数（`0`–`8`，默认 `2`）和临时错误开关；高堆压力时插件不再追加重试。重试会再次请求当前模型，可能增加等待时间与用量。部分网关错误或传输中断发生在流式输出中时，已显示的半截内容可能保留。
+- 长度截断通常无法靠重试解决。反复截断时检查模型的输出上限；不想在已输出后重试，可以关闭「截断 / 传输中断重试」。
+- **输出清理**只处理正文中带 `<thinking>`、`<thought>` 或 `<reasoning>` 标签的内容。默认保留为可折叠的思考块；也可丢弃这部分新输出，或关闭处理以原样保留。它不重写已有历史。
+- 子代理如果可以用默认模型，省略 `provider`、`model` 和 `reasoning_effort`，不要传空字符串。需要显式选择时，用 `list_subagent_models`（从 `{}` 开始）查当前会话允许的路由，再选择精确的 `provider` / `model`。
+
+## 隐私与兼容性
+
+- 不采集遥测，不向第三方上传会话。重试仍通过 DSH 调用已配置的模型服务。宿主日志和最近错误摘要可能含模型名称或上游错误片段，分享排障信息前先检查内容。
+- 诊断和设置接口仅接受 DSH 认证的 owner，并要求 `x-dsh-plugin: perf-guard` 请求头。请求头不是登录凭证；缺少原生认证接口的宿主不会开放这些端点。静态图片不需要认证。
+- 浏览器偏好存于当前站点的 `localStorage`；重试及输出清理偏好保存在 DSH 数据目录的 `perf-guard.retry.json`。禁用或移除 Bundle 不会删除会话，也不会复原自行设置的冷缓存参数。
+- 版本门槛为 DSH `0.2.1-rc.4`，已核对 Windows Desktop 的 `0.2.2-rc.5`。滚动和宿主能力按运行时探测；旧宿主可用的设置与诊断功能取决于其认证接口。新版原生 Chat 在距离底部约 25 像素内仍可能保持跟随，这是 DSH 的判定。
+
+<details>
+<summary>诊断接口与本地开发</summary>
+
+| 路径 | 用途 |
+| --- | --- |
+| `GET /api/perf-guard/health` | 查看已加载的插件版本 |
+| `GET /api/perf-guard/stats` | 查看进程内存、驻留 Agent 数、会话日志大小和近期错误摘要 |
+| `GET/POST /api/perf-guard/retry` | 查看或更新插件的重试和输出清理偏好 |
+
+```sh
+npm run check
 npm test
+npm pack --dry-run
 ```
 
-- `test/host-smoke.mjs`：状态码解析、退避、偏好归一化、重试中间件（429 重试 / 已输出不重试 / 传输中断重试 / 静默截断重试）。
-- `test/follow-sim.mjs`：假 DOM 驱动真实跟随控制器，7 个场景。
-- `test/client-smoke.mjs`：客户端装配冒烟。
-- `test/fixture/follow.html`：真浏览器仿真（Edge headless，6 项断言）。
+</details>
 
-## 已知限制
+## 反馈与许可
 
-- 长度截断（`max_tokens`）重试通常无效，应调大模型 `maxTokens`。
-- 仅做渲染层优化，不降低宿主解压会话日志的内存峰值。
-
-## License
-
-MIT
+通过 [GitHub Issues](https://github.com/TaoLe-si/dsh-perf-guard/issues) 提交问题。请注明 DSH 与插件版本、Desktop 或 Web、触发步骤，以及去除敏感信息后的必要日志。[更新记录](CHANGELOG.md) · [MIT License](LICENSE)

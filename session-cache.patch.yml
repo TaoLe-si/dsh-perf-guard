@@ -1,0 +1,8 @@
+# Optional example for the default Web profile. Merge the single cache field
+# into existing session-query-sqlite configuration; do not replace custom settings.
+- id: session-query-sqlite
+  name: '@deepseek-ai/dsh-session-query-sqlite'
+  config:
+    path: ':memory:'
+    openAt: never
+    preparedSessionCacheSize: 1

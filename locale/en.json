@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Perf Guard",
+    "description": "Reduce rendering work in long DSH chats, preserve native scrolling, and add bounded retries for transient model failures. Open Settings → 性能守卫 to adjust the controls. Retries may repeat requests to your configured model provider; diagnostics stay local to DSH. No sessions are deleted and no agents are stopped."
+  }
+}
