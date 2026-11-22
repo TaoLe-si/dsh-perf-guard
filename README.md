@@ -9,7 +9,7 @@ Perf Guard for DSH reduces transcript rendering work, respects native scrolling 
 在 DSH 的插件管理界面添加下面的 GitHub 来源。使用 CLI 时，将 `desktop` 换成实际 profile 名；Web 通常为 `web`。
 
 ```sh
-dsh plugin --profile desktop add github:TaoLe-si/dsh-perf-guard#v1.9.2
+dsh plugin --profile desktop add github:TaoLe-si/dsh-perf-guard#v1.9.3
 ```
 
 也可从 [GitHub Releases](https://github.com/TaoLe-si/dsh-perf-guard/releases) 获取固定版本的安装包。不需要 npm 账号或额外构建步骤。不要在同一个 profile 中同时使用 Bundle 安装和手工插入插件行。
@@ -38,7 +38,7 @@ dsh plugin --profile desktop add github:TaoLe-si/dsh-perf-guard#v1.9.2
 - 设置页可调整重试次数（`0`–`8`，默认 `2`）和临时错误开关；高堆压力时插件不再追加重试。重试会再次请求当前模型，可能增加等待时间与用量。部分网关错误或传输中断发生在流式输出中时，已显示的半截内容可能保留。
 - 长度截断通常无法靠重试解决。反复截断时检查模型的输出上限；不想在已输出后重试，可以关闭「截断 / 传输中断重试」。
 - **输出清理**只处理正文中带 `<thinking>`、`<thought>` 或 `<reasoning>` 标签的内容。默认保留为可折叠的思考块；也可丢弃这部分新输出，或关闭处理以原样保留。它不重写已有历史。
-- 子代理如果可以用默认模型，省略 `provider`、`model` 和 `reasoning_effort`，不要传空字符串。需要显式选择时，用 `list_subagent_models`（从 `{}` 开始）查当前会话允许的路由，再选择精确的 `provider` / `model`。
+- 子代理如果可以用默认模型，省略 `provider`、`model` 和 `reasoning_effort`，不要传空字符串。需要显式选择时，用 `list_subagent_models`（从 `{}` 开始）查当前会话允许的路由，再选择精确的 `provider` / `model`。如果列表为空，不要重复枚举或原参数；直接完成当前任务，或告知当前会话没有可用子代理路由。
 
 ## 隐私与兼容性
 

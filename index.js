@@ -24,10 +24,11 @@ import { readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 
 export const inject = ['webServer']
 
-const VERSION = '1.9.2'
+const VERSION = '1.9.3'
 const ROUTE_PREFIX = '/api/perf-guard'
 const SESSION_SCAN_TTL_MS = 60 * 1000
 const MONITOR_INTERVAL_MS = 30 * 1000
@@ -1334,6 +1335,7 @@ const INVALID_CHILD_FIELDS = /^child LLM (?:`(?:provider|model|reasoning_effort)
 const INVALID_DISCOVERY_FIELDS = /^(?:LLM provider "[^\r\n]+" is not allowed for this Session|`(?:provider|model)` must be non-empty|`model` requires `provider`)$/
 const DELEGATION_HINT = '性能守卫：可用默认模型时，省略 `provider`、`model` 和 `reasoning_effort` 三个字段后重试一次，不要传空字符串。必须指定模型时，先用 `list_subagent_models` 查询当前会话允许的路由，不要重试被拒绝的组合。'
 const DISCOVERY_HINT = '性能守卫：先以空对象 `{}` 调用 `list_subagent_models` 查看当前会话允许的提供方。只传返回的 `provider` 查询模型，不要传空字符串。'
+const EMPTY_ROUTE_HINT = '性能守卫：这次调用因传入空字符串而失败，不要重复相同参数。`list_subagent_models` 的可选字段必须省略，不是传 `""`；如果省略字段后没有返回任何提供方，说明当前会话没有可用的显式子代理路由，请停止重试。需要使用默认路由时，调用 `subagent` 或 `subagent_fork` 时同时省略 `provider`、`model`、`reasoning_effort`；若默认路由也不可用，请直接完成当前任务。'
 
 /** 扩充已拒绝的结果内容，不改原始错误、参数或授权裁决。 */
 async function withSubagentRouteHint(exec, result, next) {
@@ -1343,12 +1345,31 @@ async function withSubagentRouteHint(exec, result, next) {
   const message = result.error?.message
   if (typeof message !== 'string') return decision
   let hint
+  let emptyRoute = false
+  const args = exec.arguments && typeof exec.arguments === 'object' ? exec.arguments : {}
   if (DELEGATION_TOOLS.has(exec.name) && (DENIED_CHILD_ROUTE.test(message) || INVALID_CHILD_FIELDS.test(message))) {
     hint = DELEGATION_HINT
+    emptyRoute = Object.hasOwn(args, 'provider') && args.provider === ''
+      || Object.hasOwn(args, 'model') && args.model === ''
+      || Object.hasOwn(args, 'reasoning_effort') && args.reasoning_effort === ''
   } else if (exec.name === 'list_subagent_models' && (DENIED_CHILD_ROUTE.test(message) || INVALID_DISCOVERY_FIELDS.test(message))) {
     hint = DISCOVERY_HINT
+    emptyRoute = Object.hasOwn(args, 'provider') && args.provider === ''
+      || Object.hasOwn(args, 'model') && args.model === ''
   } else return decision
-  return { ...decision, content: [...result.content, { type: 'text', text: hint }] }
+  const guidance = emptyRoute ? EMPTY_ROUTE_HINT : hint
+  const contexts = emptyRoute
+    ? [{
+        role: 'user',
+        content: [{ type: 'text', text: guidance }],
+        source: { kind: 'tool-registry' },
+      }]
+    : []
+  return {
+    ...decision,
+    content: [...result.content, { type: 'text', text: guidance }],
+    ...contexts.length > 0 ? { additionalContexts: [...decision.additionalContexts ?? [], createUserMessage(contexts[0])] } : {},
+  }
 }
 
 export function apply(ctx) {

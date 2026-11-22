@@ -457,6 +457,19 @@ test('subagent route denial gets recovery instructions without changing the erro
   assert.equal(calls, 2)
 })
 
+test('empty route fields add a next-step correction and forbid replaying the same call', async () => {
+  const decision = await __internals.withSubagentRouteHint(
+    { name: 'list_subagent_models', arguments: { provider: '', model: '' } },
+    routeFailure('`provider` must be non-empty'),
+    async () => ({ kind: 'accept' }),
+  )
+  assert.match(decision.content[1].text, /不要重复相同参数/)
+  assert.match(decision.content[1].text, /没有可用的显式子代理路由/)
+  assert.equal(decision.additionalContexts.length, 1)
+  assert.equal(decision.additionalContexts[0].role, 'user')
+  assert.equal(decision.additionalContexts[0].source.kind, 'tool-registry')
+  assert.match(decision.additionalContexts[0].content[0].text, /直接完成当前任务/)
+})
 test('discovery validation suggests an empty request, not empty fields', async () => {
   const decision = await __internals.withSubagentRouteHint(
     { name: 'list_subagent_models' }, routeFailure('`provider` must be non-empty'), async () => ({ kind: 'accept' }),
