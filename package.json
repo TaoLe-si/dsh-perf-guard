@@ -1,6 +1,6 @@
 {
   "name": "dsh-perf-guard",
-  "version": "1.9.3",
+  "version": "1.9.4",
   "description": "DSH 长会话优化插件：限制冷会话缓存、原生滚动兼容、思考链自动展开与错误恢复。",
   "type": "module",
   "main": "index.js",

@@ -470,6 +470,16 @@ test('empty route fields add a next-step correction and forbid replaying the sam
   assert.equal(decision.additionalContexts[0].source.kind, 'tool-registry')
   assert.match(decision.additionalContexts[0].content[0].text, /直接完成当前任务/)
 })
+test('empty successful discovery stops enumeration and adds a next-step correction', async () => {
+  const decision = await __internals.withSubagentRouteHint(
+    { name: 'list_subagent_models', arguments: {} },
+    { isError: false, content: [{ type: 'text', text: '(no LLM providers)' }] },
+    async () => ({ kind: 'accept' }),
+  )
+  assert.match(decision.content[1].text, /停止重复调用/)
+  assert.equal(decision.additionalContexts.length, 1)
+  assert.match(decision.additionalContexts[0].content[0].text, /默认路由也不可用/)
+})
 test('discovery validation suggests an empty request, not empty fields', async () => {
   const decision = await __internals.withSubagentRouteHint(
     { name: 'list_subagent_models' }, routeFailure('`provider` must be non-empty'), async () => ({ kind: 'accept' }),
