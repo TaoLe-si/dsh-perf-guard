@@ -464,27 +464,30 @@ test('empty route fields add a next-step correction and forbid replaying the sam
     async () => ({ kind: 'accept' }),
   )
   assert.match(decision.content[1].text, /不要重复相同参数/)
-  assert.match(decision.content[1].text, /没有可用的显式子代理路由/)
   assert.equal(decision.additionalContexts.length, 1)
-  assert.equal(decision.additionalContexts[0].role, 'user')
-  assert.equal(decision.additionalContexts[0].source.kind, 'tool-registry')
-  assert.match(decision.additionalContexts[0].content[0].text, /直接完成当前任务/)
+  const [context] = decision.additionalContexts
+  assert.equal(typeof context.id, 'string')
+  assert.equal(context.role, 'user')
+  assert.equal(context.source.kind, 'perf-guard')
+  assert.match(context.content[0].text, /授权的精确 ID/)
 })
+
 test('empty successful discovery stops enumeration and adds a next-step correction', async () => {
   const decision = await __internals.withSubagentRouteHint(
     { name: 'list_subagent_models', arguments: {} },
-    { isError: false, content: [{ type: 'text', text: '(no LLM providers)' }] },
+    { isError: false, value: '(no LLM providers)', content: [{ type: 'text', text: '(no LLM providers)' }] },
     async () => ({ kind: 'accept' }),
   )
-  assert.match(decision.content[1].text, /停止重复调用/)
+  assert.match(decision.content[1].text, /不要反复查询/)
   assert.equal(decision.additionalContexts.length, 1)
-  assert.match(decision.additionalContexts[0].content[0].text, /默认路由也不可用/)
+  assert.match(decision.additionalContexts[0].content[0].text, /不要猜测路由/)
 })
+
 test('discovery validation suggests an empty request, not empty fields', async () => {
   const decision = await __internals.withSubagentRouteHint(
     { name: 'list_subagent_models' }, routeFailure('`provider` must be non-empty'), async () => ({ kind: 'accept' }),
   )
-  assert.match(decision.content[1].text, /\{\}.*list_subagent_models/)
+  assert.match(decision.content[1].text, /list_subagent_models\(\{\}\)/)
 })
 
 test('subagent hint passes through unrelated calls and explicit post-execution decisions', async () => {

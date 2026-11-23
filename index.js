@@ -24,11 +24,12 @@ import { readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { randomUUID } from 'node:crypto'
+import { DISCOVERY_TOOL, modelCatalogMiddleware } from './model-catalog.js'
 
 export const inject = ['webServer']
 
-const VERSION = '1.9.4'
+const VERSION = '1.9.5'
 const ROUTE_PREFIX = '/api/perf-guard'
 const SESSION_SCAN_TTL_MS = 60 * 1000
 const MONITOR_INTERVAL_MS = 30 * 1000
@@ -1333,59 +1334,47 @@ const DELEGATION_TOOLS = new Set(['subagent', 'subagent_fork'])
 const DENIED_CHILD_ROUTE = /^child LLM route "[^\r\n]+" is not allowed for this Session(?:; without a recorded model-selection policy, explicit selection is limited to the parent route)?$/
 const INVALID_CHILD_FIELDS = /^child LLM (?:`(?:provider|model|reasoning_effort)` must be non-empty|`provider` and `model` must be supplied together|`reasoning_effort` requires both `provider` and `model`; supply both or omit all three fields)$/
 const INVALID_DISCOVERY_FIELDS = /^(?:LLM provider "[^\r\n]+" is not allowed for this Session|`(?:provider|model)` must be non-empty|`model` requires `provider`)$/
-const DELEGATION_HINT = '性能守卫：可用默认模型时，省略 `provider`、`model` 和 `reasoning_effort` 三个字段后重试一次，不要传空字符串。必须指定模型时，先用 `list_subagent_models` 查询当前会话允许的路由，不要重试被拒绝的组合。'
-const DISCOVERY_HINT = '性能守卫：先以空对象 `{}` 调用 `list_subagent_models` 查看当前会话允许的提供方。只传返回的 `provider` 查询模型，不要传空字符串。'
-const EMPTY_ROUTE_HINT = '性能守卫：这次调用因传入空字符串而失败，不要重复相同参数。`list_subagent_models` 的可选字段必须省略，不是传 `""`；如果省略字段后没有返回任何提供方，说明当前会话没有可用的显式子代理路由，请停止重试。需要使用默认路由时，调用 `subagent` 或 `subagent_fork` 时同时省略 `provider`、`model`、`reasoning_effort`；若默认路由也不可用，请直接完成当前任务。'
-const NO_ROUTE_HINT = '性能守卫：当前会话没有可用的显式子代理路由，停止重复调用 `list_subagent_models` 和重试空路由。需要默认子代理时，调用 `subagent` 或 `subagent_fork` 时省略 `provider`、`model`、`reasoning_effort`；如果默认路由也不可用，请直接完成当前任务。'
+const DELEGATION_HINT = '性能守卫：不要重放被拒绝的参数。使用默认路由时，同时省略 `provider`、`model` 和 `reasoning_effort`。必须指定模型时，只能从 `list_subagent_models({})` 输出的 Session explicit child routes 中选，不要从宿主模型目录猜测授权。'
+const DISCOVERY_HINT = '性能守卫：不要重复相同参数。`list_subagent_models({})` 不带筛选条件；指定提供方或模型时须使用本会话授权的精确 ID。'
+const NO_ROUTE_HINT = '性能守卫：这次查询未返回可用的子代理模型。不要反复查询同一条件，也不要猜测路由。'
+
+function withRouteGuidance(decision, result, text, addContext) {
+  const content = [...result.content, { type: 'text', text }]
+  if (!addContext) return { ...decision, content }
+  return {
+    ...decision,
+    content,
+    additionalContexts: [...decision.additionalContexts ?? [], {
+      id: randomUUID(), role: 'user', source: { kind: 'perf-guard' },
+      content: [{ type: 'text', text }],
+    }],
+  }
+}
 
 /** 追加纠正上下文，不改原始错误、参数或授权裁决。 */
 async function withSubagentRouteHint(exec, result, next) {
   const decision = await next()
+  const discovery = exec.name === DISCOVERY_TOOL
+  if (!discovery && !DELEGATION_TOOLS.has(exec.name)) return decision
   if (decision?.kind !== 'accept' || decision.content !== undefined || Object.hasOwn(decision, 'value')
     || exec.signal?.aborted || !Array.isArray(result.content)) return decision
 
-  const contentText = result.content.filter(block => block?.type === 'text').map(block => block.text).join('\n').trim()
-  const emptyDiscoveryResult = exec.name === 'list_subagent_models' && !result.isError
-    && (contentText === '' || /^\(no (?:LLM providers|advertised models\b)/.test(contentText))
-  if (emptyDiscoveryResult) {
-    const context = createUserMessage({
-      content: [{ type: 'text', text: NO_ROUTE_HINT }],
-      source: { kind: 'tool-registry' },
-    })
-    return {
-      ...decision,
-      content: [...result.content, { type: 'text', text: NO_ROUTE_HINT }],
-      additionalContexts: [...decision.additionalContexts ?? [], context],
-    }
+  if (!result.isError) {
+    const value = result.value
+    return discovery && typeof value === 'string' && /^(?:|\(no (?:LLM providers|advertised models for [^\r\n]+)\))$/.test(value.trim())
+      ? withRouteGuidance(decision, result, NO_ROUTE_HINT, true) : decision
   }
 
-  if (!result.isError) return decision
   const message = result.error?.message
   if (typeof message !== 'string') return decision
-  let hint
-  let emptyRoute = false
-  const args = exec.arguments && typeof exec.arguments === 'object' ? exec.arguments : {}
+  const args = exec.arguments ?? {}
   if (DELEGATION_TOOLS.has(exec.name) && (DENIED_CHILD_ROUTE.test(message) || INVALID_CHILD_FIELDS.test(message))) {
-    hint = DELEGATION_HINT
-    emptyRoute = Object.hasOwn(args, 'provider') && args.provider === ''
-      || Object.hasOwn(args, 'model') && args.model === ''
-      || Object.hasOwn(args, 'reasoning_effort') && args.reasoning_effort === ''
-  } else if (exec.name === 'list_subagent_models' && (DENIED_CHILD_ROUTE.test(message) || INVALID_DISCOVERY_FIELDS.test(message))) {
-    hint = DISCOVERY_HINT
-    emptyRoute = Object.hasOwn(args, 'provider') && args.provider === ''
-      || Object.hasOwn(args, 'model') && args.model === ''
-  } else return decision
-  const guidance = emptyRoute ? EMPTY_ROUTE_HINT : hint
-  return {
-    ...decision,
-    content: [...result.content, { type: 'text', text: guidance }],
-    ...emptyRoute ? {
-      additionalContexts: [...decision.additionalContexts ?? [], createUserMessage({
-        content: [{ type: 'text', text: guidance }],
-        source: { kind: 'tool-registry' },
-      })],
-    } : {},
+    return withRouteGuidance(decision, result, DELEGATION_HINT, [args.provider, args.model, args.reasoning_effort].includes(''))
   }
+  if (discovery && (DENIED_CHILD_ROUTE.test(message) || INVALID_DISCOVERY_FIELDS.test(message))) {
+    return withRouteGuidance(decision, result, DISCOVERY_HINT, [args.provider, args.model].includes(''))
+  }
+  return decision
 }
 
 export function apply(ctx) {
@@ -1393,6 +1382,7 @@ export function apply(ctx) {
   const logger = ctx.logger
 
   ctx.inject(['tools'], (child) => {
+    child.on('tools/execute', modelCatalogMiddleware(child))
     child.on('tools/post-execute', withSubagentRouteHint)
   })
 

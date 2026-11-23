@@ -1,7 +1,7 @@
 {
   "name": "dsh-perf-guard",
-  "version": "1.9.4",
-  "description": "DSH 长会话优化插件：限制冷会话缓存、原生滚动兼容、思考链自动展开与错误恢复。",
+  "version": "1.9.5",
+  "description": "DSH 长会话优化插件：原生滚动兼容、模型目录、有限重试与可选冷会话缓存配置。",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -13,6 +13,7 @@
   },
   "files": [
     "index.js",
+    "model-catalog.js",
     "client.js",
     "cordis.patch.yml",
     "session-cache.patch.yml",
@@ -44,8 +45,8 @@
     "url": "https://github.com/TaoLe-si/dsh-perf-guard/issues"
   },
   "scripts": {
-    "test": "node --test test/host-smoke.mjs test/host-contract.mjs test/follow-sim.mjs test/hover-intent.mjs && node test/client-smoke.mjs",
-    "check": "node --check index.js && node --check client.js"
+    "test": "node --test test/host-smoke.mjs test/host-contract.mjs test/model-catalog.mjs test/follow-sim.mjs test/hover-intent.mjs && node test/client-smoke.mjs",
+    "check": "node --check index.js && node --check model-catalog.js && node --check client.js"
   },
   "engines": {
     "node": ">=20",
